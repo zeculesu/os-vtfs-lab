@@ -29,6 +29,7 @@ struct vtfs_file {
   int used;
   enum vtfs_type type;
   ino_t parent_ino;
+  int nlink;
 };
 
 static struct vtfs_file vtfs_files[MAX_FILES];
@@ -56,6 +57,7 @@ int vtfs_mkdir(struct mnt_idmap*, struct inode*, struct dentry*, umode_t);
 int vtfs_rmdir(struct inode*, struct dentry*);
 ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* offset);
 ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* offset);
+int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry* new_dentry);
 
 static struct vtfs_file* vtfs_find_file_by_ino(ino_t ino) {
   for (int i = 0; i < MAX_FILES; i++) {
@@ -79,7 +81,8 @@ struct inode_operations vtfs_inode_ops = {
     .create = vtfs_create,
     .unlink = vtfs_unlink,
     .mkdir = vtfs_mkdir,
-    .rmdir = vtfs_rmdir
+    .rmdir = vtfs_rmdir,
+    .link = vtfs_link
 };
 
 struct file_operations vtfs_dir_ops = {
@@ -171,11 +174,13 @@ int vtfs_create(
   vtfs_files[i].ino = next_ino++;
   vtfs_files[i].parent_ino = parent_inode->i_ino;
   vtfs_files[i].type = VTFS_FILE;
+  vtfs_files[i].nlink = 1;
 
   struct inode* inode =
       vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFREG | mode, vtfs_files[i].ino);
   inode->i_op = &vtfs_inode_ops;
   inode->i_fop = &vtfs_file_ops;
+  set_nlink(inode, 1);
 
   d_add(child_dentry, inode);
   return 0;
@@ -186,9 +191,16 @@ int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
   if (!file)
     return -ENOENT;
   //   if (file->type != VTFS_FILE)
-  //     return -ENOTREG;
-
+  //     return -EPERM;
+  ino_t ino = file->ino;
   file->used = 0;
+
+  struct vtfs_file* inode_file = vtfs_find_file_by_ino(ino);
+
+  inode_file->nlink--;
+  if (inode_file->nlink == 0)
+    inode_file->used = 0;
+
   return 0;
 }
 
@@ -290,6 +302,46 @@ ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* of
 
   *offset += len;
   return len;
+}
+
+int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry* new_dentry) {
+  struct inode* inode = old_dentry->d_inode;
+  struct vtfs_file* file;
+
+  if (!inode)
+    return -ENOENT;
+
+  file = vtfs_find_file_by_ino(inode->i_ino);
+  if (!file)
+    return -ENOENT;
+
+  if (file->type != VTFS_FILE)
+    return -EPERM;
+
+  int i;
+  for (i = 0; i < MAX_FILES; i++) {
+    if (!vtfs_files[i].used)
+      break;
+  }
+  if (i == MAX_FILES)
+    return -ENOSPC;
+
+  vtfs_files[i].used = 1;
+  strncpy(vtfs_files[i].name, new_dentry->d_name.name, MAX_FILENAME - 1);
+  vtfs_files[i].name[MAX_FILENAME - 1] = 0;
+
+  vtfs_files[i].ino = file->ino;
+  vtfs_files[i].type = VTFS_FILE;
+  vtfs_files[i].mode = file->mode;
+  vtfs_files[i].size = file->size;
+  vtfs_files[i].parent_ino = parent_dir->i_ino;
+  vtfs_files[i].nlink = 0;
+
+  file->nlink++;
+  inc_nlink(inode);
+
+  d_add(new_dentry, inode);
+  return 0;
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
