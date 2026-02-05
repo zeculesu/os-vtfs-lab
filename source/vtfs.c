@@ -5,6 +5,7 @@
 #include <linux/printk.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/uaccess.h>
 
 #define MODULE_NAME "vtfs"
 MODULE_LICENSE("GPL");
@@ -53,7 +54,16 @@ int vtfs_create(
 int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry);
 int vtfs_mkdir(struct mnt_idmap*, struct inode*, struct dentry*, umode_t);
 int vtfs_rmdir(struct inode*, struct dentry*);
+ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* offset);
+ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* offset);
 
+static struct vtfs_file* vtfs_find_file_by_ino(ino_t ino) {
+  for (int i = 0; i < MAX_FILES; i++) {
+    if (vtfs_files[i].used && vtfs_files[i].ino == ino)
+      return &vtfs_files[i];
+  }
+  return NULL;
+}
 static struct vtfs_file* vtfs_find_file(const char* name, ino_t parent_ino) {
   int i;
   for (i = 0; i < MAX_FILES; i++) {
@@ -75,6 +85,8 @@ struct inode_operations vtfs_inode_ops = {
 struct file_operations vtfs_dir_ops = {
     .iterate_shared = vtfs_iterate,
 };
+
+struct file_operations vtfs_file_ops = {.read = vtfs_read, .write = vtfs_write};
 
 struct dentry* vtfs_mount(
     struct file_system_type* fs_type, int flags, const char* token, void* data
@@ -128,7 +140,7 @@ struct dentry* vtfs_lookup(
     inode->i_fop = &vtfs_dir_ops;
   } else {
     inode->i_op = &vtfs_inode_ops;
-    inode->i_fop = NULL;
+    inode->i_fop = &vtfs_file_ops;
   }
 
   d_add(child_dentry, inode);
@@ -163,7 +175,7 @@ int vtfs_create(
   struct inode* inode =
       vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFREG | mode, vtfs_files[i].ino);
   inode->i_op = &vtfs_inode_ops;
-  inode->i_fop = NULL;
+  inode->i_fop = &vtfs_file_ops;
 
   d_add(child_dentry, inode);
   return 0;
@@ -173,6 +185,8 @@ int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
   struct vtfs_file* file = vtfs_find_file(child_dentry->d_name.name, parent_inode->i_ino);
   if (!file)
     return -ENOENT;
+  //   if (file->type != VTFS_FILE)
+  //     return -ENOTREG;
 
   file->used = 0;
   return 0;
@@ -229,6 +243,51 @@ int vtfs_rmdir(struct inode* parent_inode, struct dentry* child_dentry) {
 
   dir->used = 0;
   return 0;
+}
+
+ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* offset) {
+  struct vtfs_file* file = vtfs_find_file_by_ino(filp->f_inode->i_ino);
+  if (!file)
+    return -ENOENT;
+  if (file->type != VTFS_FILE)
+    return -EISDIR;
+
+  if (*offset >= file->size)
+    return 0;
+
+  size_t to_read;
+  if (*offset + len > file->size)
+    to_read = file->size - *offset;
+  else
+    to_read = len;
+
+  if (copy_to_user(buffer, file->data + *offset, to_read) != 0)
+    return -EFAULT;
+
+  *offset += to_read;
+
+  return to_read;
+}
+
+ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* offset) {
+  struct vtfs_file* file = vtfs_find_file_by_ino(filp->f_inode->i_ino);
+  if (!file)
+    return -ENOENT;
+  if (file->type != VTFS_FILE)
+    return -EISDIR;
+
+  if (*offset + len > MAX_FILE_SIZE)
+    return -ENOSPC;
+
+  if (copy_from_user(file->data + *offset, buffer, len) != 0)
+    return -EFAULT;
+
+  size_t new_end = *offset + len;
+  if (new_end > file->size)
+    file->size = new_end;
+
+  *offset += len;
+  return len;
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
