@@ -41,6 +41,29 @@ static struct vtfs_inode vtfs_inodes[MAX_FILES];
 static struct vtfs_file vtfs_files[MAX_FILES];
 
 static ino_t next_ino = 101;
+struct dentry* vtfs_mount(
+    struct file_system_type* fs_type, int flags, const char* token, void* data
+);
+void vtfs_kill_sb(struct super_block* sb);
+int vtfs_fill_super(struct super_block* sb, void* data, int silent);
+struct inode* vtfs_get_inode(struct super_block* sb, struct inode* dir, umode_t mode, int i_ino);
+struct dentry* vtfs_lookup(
+    struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag
+);
+int vtfs_iterate(struct file* filp, struct dir_context* ctx);
+int vtfs_create(
+    struct mnt_idmap* idmap,
+    struct inode* parent_inode,
+    struct dentry* child_dentry,
+    umode_t mode,
+    bool excl
+);
+int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry);
+int vtfs_mkdir(struct mnt_idmap*, struct inode*, struct dentry*, umode_t);
+int vtfs_rmdir(struct inode*, struct dentry*);
+ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* offset);
+ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* offset);
+int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry* new_dentry);
 
 static struct vtfs_inode* vtfs_find_inode(ino_t ino) {
   for (int i = 0; i < MAX_FILES; i++) {
@@ -297,7 +320,7 @@ int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
   return 0;
 }
 
-struct file_operations vtfs_file_ops = {read = vtfs_read, .write = vtfs_write};
+struct file_operations vtfs_file_ops = {.read = vtfs_read, .write = vtfs_write};
 struct file_operations vtfs_dir_ops = {.iterate_shared = vtfs_iterate};
 struct inode_operations vtfs_inode_ops = {
     .lookup = vtfs_lookup, .create = vtfs_create, .unlink = vtfs_unlink, .link = vtfs_link
