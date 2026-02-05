@@ -2,6 +2,8 @@
 #include <linux/module.h>
 #include <linux/printk.h>
 #include <linux/mount.h>
+#include <linux/string.h>
+
 
 #define MODULE_NAME "vtfs"
 
@@ -25,6 +27,20 @@ struct inode* vtfs_get_inode(
   umode_t mode, 
   int i_ino
 );
+
+struct dentry* vtfs_lookup(
+  struct inode* parent_inode,
+  struct dentry* child_dentry,
+  unsigned int flag
+);
+int vtfs_iterate(struct file* filp, struct dir_context* ctx);
+
+struct inode_operations vtfs_inode_ops = {
+  .lookup = vtfs_lookup,
+};
+struct file_operations vtfs_dir_ops = {
+  .iterate_shared = vtfs_iterate,
+};
 
 struct dentry* vtfs_mount(
   struct file_system_type* fs_type,
@@ -56,6 +72,43 @@ struct inode* vtfs_get_inode(
   return inode;
 }
 
+struct dentry* vtfs_lookup(
+  struct inode* parent_inode,
+  struct dentry* child_dentry,
+  unsigned int flag
+) {
+  return NULL;
+}
+
+int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
+  struct dentry* dentry = filp->f_path.dentry;
+  struct inode* inode = dentry->d_inode;
+
+  if (inode->i_ino != 100)
+    return 0;
+
+  if (ctx->pos == 0) {
+    if (!dir_emit(ctx, ".", 1, inode->i_ino, DT_DIR))
+      return 0;
+    ctx->pos++;
+  }
+
+  if (ctx->pos == 1) {
+    if (!dir_emit(ctx, "..", 2,
+          dentry->d_parent->d_inode->i_ino, DT_DIR))
+      return 0;
+    ctx->pos++;
+  }
+
+  if (ctx->pos == 2) {
+    if (!dir_emit(ctx, "test.txt", 8, 101, DT_REG))
+      return 0;
+    ctx->pos++;
+  }
+
+  return 0;
+}
+
 struct file_system_type vtfs_fs_type = {
   .name = "vtfs",
   .mount = vtfs_mount,
@@ -67,7 +120,10 @@ void vtfs_kill_sb(struct super_block* sb) {
 }
 
 int vtfs_fill_super(struct super_block *sb, void *data, int silent) {
-  struct inode* inode = vtfs_get_inode(sb, NULL, S_IFDIR, 1000);
+  struct inode* inode = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 1000);
+
+  inode->i_op = &vtfs_inode_ops;
+  inode->i_fop = &vtfs_dir_ops;
 
   sb->s_root = d_make_root(inode);
   if (sb->s_root == NULL) {
