@@ -13,6 +13,24 @@ MODULE_DESCRIPTION("A simple FS kernel module");
 
 #define LOG(fmt, ...) pr_info("[" MODULE_NAME "]: " fmt, ##__VA_ARGS__)
 
+
+#define MAX_FILES 10
+#define MAX_FILENAME 32
+#define MAX_FILE_SIZE 4096
+
+struct vtfs_file {
+    char name[MAX_FILENAME];
+    char data[MAX_FILE_SIZE];
+    size_t size;
+    umode_t mode;
+    ino_t ino;
+    int used;
+};
+
+static struct vtfs_file vtfs_files[MAX_FILES];
+static ino_t next_ino = 101;
+
+
 struct dentry* vtfs_mount(
     struct file_system_type* fs_type,
     int flags,
@@ -40,6 +58,7 @@ int vtfs_create(struct mnt_idmap *idmap,
                 umode_t mode,
                 bool excl);
 int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry);
+static struct vtfs_file* vtfs_find_file(const char *name);
 
 struct inode_operations vtfs_inode_ops = {
   .lookup = vtfs_lookup,
@@ -49,6 +68,16 @@ struct inode_operations vtfs_inode_ops = {
 struct file_operations vtfs_dir_ops = {
   .iterate_shared = vtfs_iterate,
 };
+
+static struct vtfs_file* vtfs_find_file(const char *name) {
+    int i;
+    for (i = 0; i < MAX_FILES; i++) {
+        if (vtfs_files[i].used && !strcmp(vtfs_files[i].name, name))
+            return &vtfs_files[i];
+    }
+    return NULL;
+}
+
 
 struct dentry* vtfs_mount(
   struct file_system_type* fs_type,
@@ -80,22 +109,33 @@ struct inode* vtfs_get_inode(
   return inode;
 }
 
-struct dentry* vtfs_lookup(
-  struct inode* parent_inode, 
-  struct dentry* child_dentry, 
-  unsigned int flag
-) {
-  ino_t root = parent_inode->i_ino;
-  const char *name = child_dentry->d_name.name;
-  if (root == 100 && !strcmp(name, "test.txt")) {
-    struct inode *inode = vtfs_get_inode(parent_inode->i_sb, NULL, S_IFREG, 101);
+struct dentry* vtfs_lookup(struct inode* parent_inode,
+                           struct dentry* child_dentry,
+                           unsigned int flag)
+{
+    // Файлы только в корне
+    if (parent_inode->i_ino != 100)
+        return NULL;
+
+    const char *name = child_dentry->d_name.name;
+
+    // ищем файл в RAM-хранилище
+    struct vtfs_file *file = vtfs_find_file(name);
+    if (!file)
+        return NULL; // файл не найден
+
+    // создаем inode для найденного файла
+    struct inode *inode = vtfs_get_inode(parent_inode->i_sb, parent_inode,
+                                         S_IFREG | S_IRWXUGO, file->ino);
+    inode->i_op = &vtfs_inode_ops;
+    inode->i_fop = NULL;
+
+    // связываем inode с dentry
     d_add(child_dentry, inode);
-  } else if (root == 100 && !strcmp(name, "dir")) {
-    struct inode *inode = vtfs_get_inode(parent_inode->i_sb, NULL, S_IFDIR, 200);
-    d_add(child_dentry, inode);
-  }
-  return NULL;
+
+    return NULL;
 }
+
 
 int vtfs_create(struct mnt_idmap *idmap,
                 struct inode *parent_inode,
@@ -104,32 +144,46 @@ int vtfs_create(struct mnt_idmap *idmap,
                 bool excl)
 {
     const char *name = child_dentry->d_name.name;
-    ino_t root = parent_inode->i_ino;
+    if (parent_inode->i_ino != 100)
+        return -EPERM;
 
-    if (root == 100 && !strcmp(name, "test.txt")) {
-        struct inode *inode = vtfs_get_inode(
-            parent_inode->i_sb, parent_inode, S_IFREG | S_IRWXUGO, 101);
-        inode->i_op = &vtfs_inode_ops;
-        inode->i_fop = NULL;
-        d_add(child_dentry, inode);
-    } else if (root == 100 && !strcmp(name, "new_file.txt")) {
-        struct inode *inode = vtfs_get_inode(
-            parent_inode->i_sb, parent_inode, S_IFREG | S_IRWXUGO, 102);
-        inode->i_op = &vtfs_inode_ops;
-        inode->i_fop = NULL;
-        d_add(child_dentry, inode);
+    int i;
+    for (i = 0; i < MAX_FILES; i++) {
+        if (!vtfs_files[i].used) break;
     }
+    if (i == MAX_FILES)
+        return -ENOSPC;
+
+    struct inode *inode = vtfs_get_inode(parent_inode->i_sb, parent_inode,
+                                         S_IFREG | mode, next_ino);
+    inode->i_op = &vtfs_inode_ops;
+    inode->i_fop = NULL;
+
+    vtfs_files[i].used = 1;
+    strncpy(vtfs_files[i].name, name, MAX_FILENAME-1);
+    vtfs_files[i].name[MAX_FILENAME-1] = 0;
+    vtfs_files[i].size = 0;
+    vtfs_files[i].ino = next_ino++;
+    vtfs_files[i].mode = mode;
+
+    d_add(child_dentry, inode);
 
     return 0;
 }
 
-int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
-  const char *name = child_dentry->d_name.name;
-  ino_t root = parent_inode->i_ino;
-  if (root == 100 && !strcmp(name, "test.txt")) {
-  } else if (root == 100 && !strcmp(name, "new_file.txt")) {
-  }
-  return 0;
+
+int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry)
+{
+    const char *name = child_dentry->d_name.name;
+    if (parent_inode->i_ino != 100)
+        return -EPERM;
+
+    struct vtfs_file *file = vtfs_find_file(name);
+    if (!file)
+        return -ENOENT;
+
+    file->used = 0; // удаляем файл
+    return 0;
 }
 
 int vtfs_iterate(struct file *filp, struct dir_context *ctx)
@@ -138,32 +192,36 @@ int vtfs_iterate(struct file *filp, struct dir_context *ctx)
     struct inode *inode = dentry->d_inode;
 
     if (inode->i_ino != 100)
-        return 0;
+        return 0; // только корень
 
     if (ctx->pos == 0) {
-        if (!dir_emit(ctx, ".", 1, inode->i_ino, DT_DIR))
-            return 0;
+        if (!dir_emit(ctx, ".", 1, inode->i_ino, DT_DIR)) return 0;
         ctx->pos++;
     }
-
     if (ctx->pos == 1) {
         ino_t parent_ino = inode->i_ino;
         if (dentry->d_parent && dentry->d_parent->d_inode)
             parent_ino = dentry->d_parent->d_inode->i_ino;
-
-        if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
-            return 0;
+        if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR)) return 0;
         ctx->pos++;
     }
 
-    if (ctx->pos == 2) {
-        if (!dir_emit(ctx, "test.txt", 8, 101, DT_REG))
-            return 0;
-        ctx->pos++;
+    int i;
+    for (i = 0; i < MAX_FILES; i++) {
+        if (vtfs_files[i].used) {
+            if (ctx->pos == 2) { // начинаем с pos=2
+                if (!dir_emit(ctx, vtfs_files[i].name,
+                              strlen(vtfs_files[i].name),
+                              vtfs_files[i].ino,
+                              DT_REG)) return 0;
+                ctx->pos++;
+            }
+        }
     }
 
     return 0;
 }
+
 
 struct file_system_type vtfs_fs_type = {
   .name = "vtfs",
