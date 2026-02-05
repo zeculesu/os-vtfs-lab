@@ -29,7 +29,6 @@ struct vtfs_file {
 static struct vtfs_file vtfs_files[MAX_FILES];
 static ino_t next_ino = 101;
 
-// Forward declarations
 struct dentry* vtfs_mount(struct file_system_type* fs_type, int flags, const char* token, void* data);
 void vtfs_kill_sb(struct super_block* sb);
 int vtfs_fill_super(struct super_block *sb, void *data, int silent);
@@ -48,7 +47,6 @@ static struct vtfs_file* vtfs_find_file(const char *name) {
     return NULL;
 }
 
-// -------------------- INODE / DENTRY --------------------
 
 struct inode_operations vtfs_inode_ops = {
     .lookup = vtfs_lookup,
@@ -59,8 +57,6 @@ struct inode_operations vtfs_inode_ops = {
 struct file_operations vtfs_dir_ops = {
     .iterate_shared = vtfs_iterate,
 };
-
-// -------------------- FILESYSTEM --------------------
 
 struct dentry* vtfs_mount(struct file_system_type* fs_type, int flags, const char* token, void* data) {
     struct dentry* ret = mount_nodev(fs_type, flags, data, vtfs_fill_super);
@@ -86,10 +82,8 @@ struct inode* vtfs_get_inode(struct super_block* sb, struct inode* dir, umode_t 
     return inode;
 }
 
-// -------------------- LOOKUP --------------------
-
 struct dentry* vtfs_lookup(struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag) {
-    if (parent_inode->i_ino != 100) // только корень
+    if (parent_inode->i_ino != 100)
         return NULL;
 
     const char *name = child_dentry->d_name.name;
@@ -104,8 +98,6 @@ struct dentry* vtfs_lookup(struct inode* parent_inode, struct dentry* child_dent
     d_add(child_dentry, inode);
     return NULL;
 }
-
-// -------------------- CREATE --------------------
 
 int vtfs_create(struct mnt_idmap *idmap, struct inode *parent_inode, struct dentry *child_dentry, umode_t mode, bool excl) {
     if (parent_inode->i_ino != 100)
@@ -134,8 +126,6 @@ int vtfs_create(struct mnt_idmap *idmap, struct inode *parent_inode, struct dent
     return 0;
 }
 
-// -------------------- UNLINK --------------------
-
 int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
     if (parent_inode->i_ino != 100)
         return -EPERM;
@@ -148,8 +138,6 @@ int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
     return 0;
 }
 
-// -------------------- ITERATE --------------------
-
 int vtfs_iterate(struct file *filp, struct dir_context *ctx) {
     struct dentry *dentry = filp->f_path.dentry;
     struct inode *inode = dentry->d_inode;
@@ -158,14 +146,12 @@ int vtfs_iterate(struct file *filp, struct dir_context *ctx) {
     if (inode->i_ino != 100)
         return 0;
 
-    // "." 
     if (ctx->pos == pos) {
         if (!dir_emit(ctx, ".", 1, inode->i_ino, DT_DIR)) return 0;
         ctx->pos++;
     }
     pos++;
 
-    // ".."
     if (ctx->pos == pos) {
         ino_t parent_ino = inode->i_ino;
         if (dentry->d_parent && dentry->d_parent->d_inode)
@@ -175,7 +161,6 @@ int vtfs_iterate(struct file *filp, struct dir_context *ctx) {
     }
     pos++;
 
-    // файлы
     int i;
     for (i = 0; i < MAX_FILES; i++) {
         if (vtfs_files[i].used) {
@@ -193,8 +178,6 @@ int vtfs_iterate(struct file *filp, struct dir_context *ctx) {
     return 0;
 }
 
-// -------------------- FILL SUPER --------------------
-
 int vtfs_fill_super(struct super_block *sb, void *data, int silent) {
     struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 100);
     root->i_op = &vtfs_inode_ops;
@@ -208,15 +191,11 @@ int vtfs_fill_super(struct super_block *sb, void *data, int silent) {
     return 0;
 }
 
-// -------------------- FILESYSTEM TYPE --------------------
-
 struct file_system_type vtfs_fs_type = {
     .name = "vtfs",
     .mount = vtfs_mount,
     .kill_sb = vtfs_kill_sb,
 };
-
-// -------------------- MODULE INIT/EXIT --------------------
 
 static int __init vtfs_init(void) {
     int ret = register_filesystem(&vtfs_fs_type);
