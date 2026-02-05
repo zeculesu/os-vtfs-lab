@@ -283,8 +283,10 @@ ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* of
     return -EFAULT;
 
   size_t new_end = *offset + len;
-  if (new_end > file->size)
+  if (new_end > file->size) {
     file->size = new_end;
+    filp->f_inode->i_size = file->size;
+  }
 
   *offset += len;
   return len;
