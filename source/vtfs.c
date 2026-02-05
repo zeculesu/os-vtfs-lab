@@ -61,11 +61,12 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
 
 static struct vtfs_file* vtfs_find_file_by_ino(ino_t ino) {
   for (int i = 0; i < MAX_FILES; i++) {
-    if (vtfs_files[i].used && vtfs_files[i].ino == ino)
+    if (vtfs_files[i].ino == ino && vtfs_files[i].nlink > 0)
       return &vtfs_files[i];
   }
   return NULL;
 }
+
 static struct vtfs_file* vtfs_find_file(const char* name, ino_t parent_ino) {
   int i;
   for (i = 0; i < MAX_FILES; i++) {
