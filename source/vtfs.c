@@ -73,49 +73,63 @@ struct inode* vtfs_get_inode(
 }
 
 struct dentry* vtfs_lookup(
-  struct inode* parent_inode, 
-  struct dentry* child_dentry, 
+  struct inode* parent_inode,
+  struct dentry* child_dentry,
   unsigned int flag
 ) {
-  ino_t root = parent_inode->i_ino;
   const char *name = child_dentry->d_name.name;
-  if (root == 100 && !strcmp(name, "test.txt")) {
-    struct inode *inode = vtfs_get_inode(parent_inode->i_sb, NULL, S_IFREG, 101);
-    d_add(child_dentry, inode);
-  } else if (root == 100 && !strcmp(name, "dir")) {
-    struct inode *inode = vtfs_get_inode(parent_inode->i_sb, NULL, S_IFDIR, 200);
-    d_add(child_dentry, inode);
+
+  if (parent_inode->i_ino == 100) {
+      struct inode *inode = NULL;
+
+      if (!strcmp(name, "test.txt")) {
+          inode = vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFREG | 0644, 101);
+      } else if (!strcmp(name, "dir")) {
+          inode = vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFDIR | 0755, 200);
+          inode->i_op = &vtfs_inode_ops;
+          inode->i_fop = &vtfs_dir_ops;
+      }
+
+      if (inode) {
+          d_add(child_dentry, inode);
+          return child_dentry;
+      }
   }
+
   return NULL;
 }
 
-int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
-  struct dentry* dentry = filp->f_path.dentry;
-  struct inode* inode = dentry->d_inode;
+int vtfs_iterate(struct file *filp, struct dir_context *ctx)
+{
+    struct dentry *dentry = filp->f_path.dentry;
+    struct inode *inode = dentry->d_inode;
 
-  if (inode->i_ino != 100)
+    if (inode->i_ino != 100)
+        return 0;
+
+    if (ctx->pos == 0) {
+        if (!dir_emit(ctx, ".", 1, inode->i_ino, DT_DIR))
+            return 0;
+        ctx->pos++;
+    }
+
+    if (ctx->pos == 1) {
+        ino_t parent_ino = inode->i_ino;
+        if (dentry->d_parent && dentry->d_parent->d_inode)
+            parent_ino = dentry->d_parent->d_inode->i_ino;
+
+        if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
+            return 0;
+        ctx->pos++;
+    }
+
+    if (ctx->pos == 2) {
+        if (!dir_emit(ctx, "test.txt", 8, 101, DT_REG))
+            return 0;
+        ctx->pos++;
+    }
+
     return 0;
-
-  if (ctx->pos == 0) {
-    if (!dir_emit(ctx, ".", 1, inode->i_ino, DT_DIR))
-      return 0;
-    ctx->pos++;
-  }
-
-  if (ctx->pos == 1) {
-    if (!dir_emit(ctx, "..", 2,
-          dentry->d_parent->d_inode->i_ino, DT_DIR))
-      return 0;
-    ctx->pos++;
-  }
-
-  if (ctx->pos == 2) {
-    if (!dir_emit(ctx, "test.txt", 8, 101, DT_REG))
-      return 0;
-    ctx->pos++;
-  }
-
-  return 0;
 }
 
 struct file_system_type vtfs_fs_type = {
