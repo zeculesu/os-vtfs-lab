@@ -187,22 +187,28 @@ int vtfs_create(
 }
 
 int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
-  struct vtfs_file* file = vtfs_find_file(child_dentry->d_name.name, parent_inode->i_ino);
-  if (!file)
+  struct vtfs_file* dentry =
+      vtfs_find_file(child_dentry->d_name.name, parent_inode->i_ino);
+  if (!dentry)
     return -ENOENT;
-  //   if (file->type != VTFS_FILE)
-  //     return -EPERM;
-  ino_t ino = file->ino;
-  file->used = 0;
+
+  ino_t ino = dentry->ino;
+
+  dentry->used = 0;
 
   struct vtfs_file* inode_file = vtfs_find_file_by_ino(ino);
+  if (!inode_file)
+    return -EIO;
 
   inode_file->nlink--;
-  if (inode_file->nlink == 0)
+
+  if (inode_file->nlink == 0) {
     inode_file->used = 0;
+  }
 
   return 0;
 }
+
 
 int vtfs_mkdir(
     struct mnt_idmap*, struct inode* parent_inode, struct dentry* child_dentry, umode_t mode
