@@ -399,22 +399,6 @@ int vtfs_fill_super(struct super_block* sb, void* data, int silent) {
   if (!sb->s_root)
     return -ENOMEM;
 
-  int i;
-  for (i = 0; i < MAX_FILES; i++) {
-    if (!vtfs_files[i].used)
-      break;
-  }
-  if (i < MAX_FILES) {
-    vtfs_files[i].used = 1;
-    strncpy(vtfs_files[i].name, ".", MAX_FILENAME - 1);
-    vtfs_files[i].name[MAX_FILENAME - 1] = 0;
-    vtfs_files[i].size = 0;
-    vtfs_files[i].mode = S_IFDIR | 0777;
-    vtfs_files[i].ino = 100;
-    vtfs_files[i].type = VTFS_DIR;
-    vtfs_files[i].parent_ino = 100;
-  }
-
   LOG("Superblock filled\n");
   return 0;
 }
