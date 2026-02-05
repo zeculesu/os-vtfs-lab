@@ -1,10 +1,10 @@
+#include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/printk.h>
 #include <linux/mount.h>
-#include <linux/string.h>
-#include <linux/fs.h>
+#include <linux/printk.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 #define MODULE_NAME "vtfs"
 MODULE_LICENSE("GPL");
@@ -17,178 +17,293 @@ MODULE_DESCRIPTION("VTFS - simple RAM FS");
 #define MAX_FILENAME 32
 #define MAX_FILE_SIZE 4096
 
+enum vtfs_type { VTFS_FILE, VTFS_DIR };
+
 struct vtfs_file {
-    char name[MAX_FILENAME];
-    char data[MAX_FILE_SIZE];
-    size_t size;
-    umode_t mode;
-    ino_t ino;
-    int used;
+  char name[MAX_FILENAME];
+  char data[MAX_FILE_SIZE];
+  size_t size;
+  umode_t mode;
+  ino_t ino;
+  int used;
+  enum vtfs_type type;
+  ino_t parent_ino;
 };
 
 static struct vtfs_file vtfs_files[MAX_FILES];
 static ino_t next_ino = 101;
 
-struct dentry* vtfs_mount(struct file_system_type* fs_type, int flags, const char* token, void* data);
+struct dentry* vtfs_mount(
+    struct file_system_type* fs_type, int flags, const char* token, void* data
+);
 void vtfs_kill_sb(struct super_block* sb);
-int vtfs_fill_super(struct super_block *sb, void *data, int silent);
+int vtfs_fill_super(struct super_block* sb, void* data, int silent);
 struct inode* vtfs_get_inode(struct super_block* sb, struct inode* dir, umode_t mode, int i_ino);
-struct dentry* vtfs_lookup(struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag);
+struct dentry* vtfs_lookup(
+    struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag
+);
 int vtfs_iterate(struct file* filp, struct dir_context* ctx);
-int vtfs_create(struct mnt_idmap *idmap, struct inode *parent_inode, struct dentry *child_dentry, umode_t mode, bool excl);
-int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry);
+int vtfs_create(
+    struct mnt_idmap* idmap,
+    struct inode* parent_inode,
+    struct dentry* child_dentry,
+    umode_t mode,
+    bool excl
+);
+int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry);
+int vtfs_mkdir(struct mnt_idmap*, struct inode*, struct dentry*, umode_t);
+int vtfs_rmdir(struct inode*, struct dentry*);
 
-static struct vtfs_file* vtfs_find_file(const char *name) {
-    int i;
-    for (i = 0; i < MAX_FILES; i++) {
-        if (vtfs_files[i].used && !strcmp(vtfs_files[i].name, name))
-            return &vtfs_files[i];
-    }
-    return NULL;
+static struct vtfs_file* vtfs_find_file(const char* name, ino_t parent_ino) {
+  int i;
+  for (i = 0; i < MAX_FILES; i++) {
+    if (vtfs_files[i].used && vtfs_files[i].parent_ino == parent_ino &&
+        !strcmp(vtfs_files[i].name, name))
+      return &vtfs_files[i];
+  }
+  return NULL;
 }
-
 
 struct inode_operations vtfs_inode_ops = {
     .lookup = vtfs_lookup,
     .create = vtfs_create,
-    .unlink = vtfs_unlink
+    .unlink = vtfs_unlink,
+    .mkdir = vtfs_mkdir,
+    .rmdir = vtfs_rmdir
 };
 
 struct file_operations vtfs_dir_ops = {
     .iterate_shared = vtfs_iterate,
 };
 
-struct dentry* vtfs_mount(struct file_system_type* fs_type, int flags, const char* token, void* data) {
-    struct dentry* ret = mount_nodev(fs_type, flags, data, vtfs_fill_super);
-    if (!ret) {
-        printk(KERN_ERR "[vtfs] Can't mount file system\n");
-    } else {
-        printk(KERN_INFO "[vtfs] Mounted successfully\n");
-    }
-    return ret;
+struct dentry* vtfs_mount(
+    struct file_system_type* fs_type, int flags, const char* token, void* data
+) {
+  struct dentry* ret = mount_nodev(fs_type, flags, data, vtfs_fill_super);
+  if (!ret) {
+    printk(KERN_ERR "[vtfs] Can't mount file system\n");
+  } else {
+    printk(KERN_INFO "[vtfs] Mounted successfully\n");
+  }
+  return ret;
 }
 
 void vtfs_kill_sb(struct super_block* sb) {
-    printk(KERN_INFO "[vtfs] Superblock destroyed, unmount ok\n");
+  printk(KERN_INFO "[vtfs] Superblock destroyed, unmount ok\n");
 }
 
 struct inode* vtfs_get_inode(struct super_block* sb, struct inode* dir, umode_t mode, int i_ino) {
-    struct inode *inode = new_inode(sb);
-    if (!inode) return NULL;
-
-    inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
-    inode->i_ino = i_ino;
-
-    return inode;
-}
-
-struct dentry* vtfs_lookup(struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag) {
-    if (parent_inode->i_ino != 100)
-        return NULL;
-
-    const char *name = child_dentry->d_name.name;
-    struct vtfs_file *file = vtfs_find_file(name);
-    if (!file)
-        return NULL;
-
-    struct inode *inode = vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFREG | S_IRWXUGO, file->ino);
-    inode->i_op = &vtfs_inode_ops;
-    inode->i_fop = NULL;
-
-    d_add(child_dentry, inode);
+  struct inode* inode = new_inode(sb);
+  if (!inode)
     return NULL;
+
+  inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
+  inode->i_ino = i_ino;
+
+  return inode;
 }
 
-int vtfs_create(struct mnt_idmap *idmap, struct inode *parent_inode, struct dentry *child_dentry, umode_t mode, bool excl) {
-    if (parent_inode->i_ino != 100)
-        return -EPERM;
+struct dentry* vtfs_lookup(
+    struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag
+) {
+  const char* name = child_dentry->d_name.name;
+  struct vtfs_file* file = vtfs_find_file(name, parent_inode->i_ino);
+  if (!file || file->parent_ino != parent_inode->i_ino)
+    return NULL;
 
-    const char *name = child_dentry->d_name.name;
-    int i;
-    for (i = 0; i < MAX_FILES; i++) {
-        if (!vtfs_files[i].used) break;
-    }
-    if (i == MAX_FILES)
-        return -ENOSPC;
+  umode_t mode;
+  if (file->type == VTFS_DIR) {
+    mode = S_IFDIR | (file->mode & ~S_IFMT);
+  } else {
+    mode = S_IFREG | (file->mode & ~S_IFMT);
+  }
 
-    vtfs_files[i].used = 1;
-    strncpy(vtfs_files[i].name, name, MAX_FILENAME-1);
-    vtfs_files[i].name[MAX_FILENAME-1] = 0;
-    vtfs_files[i].size = 0;
-    vtfs_files[i].mode = mode;
-    vtfs_files[i].ino = next_ino++;
+  struct inode* inode = vtfs_get_inode(parent_inode->i_sb, parent_inode, mode, file->ino);
 
-    struct inode *inode = vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFREG | mode, vtfs_files[i].ino);
+  if (!inode)
+    return NULL;
+
+  if (file->type == VTFS_DIR) {
+    inode->i_op = &vtfs_inode_ops;
+    inode->i_fop = &vtfs_dir_ops;
+  } else {
     inode->i_op = &vtfs_inode_ops;
     inode->i_fop = NULL;
+  }
 
-    d_add(child_dentry, inode);
-    return 0;
+  d_add(child_dentry, inode);
+  return NULL;
 }
 
-int vtfs_unlink(struct inode *parent_inode, struct dentry *child_dentry) {
-    if (parent_inode->i_ino != 100)
-        return -EPERM;
+int vtfs_create(
+    struct mnt_idmap* idmap,
+    struct inode* parent_inode,
+    struct dentry* child_dentry,
+    umode_t mode,
+    bool excl
+) {
+  const char* name = child_dentry->d_name.name;
+  int i;
+  for (i = 0; i < MAX_FILES; i++) {
+    if (!vtfs_files[i].used)
+      break;
+  }
+  if (i == MAX_FILES)
+    return -ENOSPC;
 
-    struct vtfs_file *file = vtfs_find_file(child_dentry->d_name.name);
-    if (!file)
-        return -ENOENT;
+  vtfs_files[i].used = 1;
+  strncpy(vtfs_files[i].name, name, MAX_FILENAME - 1);
+  vtfs_files[i].name[MAX_FILENAME - 1] = 0;
+  vtfs_files[i].size = 0;
+  vtfs_files[i].mode = mode;
+  vtfs_files[i].ino = next_ino++;
+  vtfs_files[i].parent_ino = parent_inode->i_ino;
+  vtfs_files[i].type = VTFS_FILE;
 
-    file->used = 0;
-    return 0;
+  struct inode* inode =
+      vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFREG | mode, vtfs_files[i].ino);
+  inode->i_op = &vtfs_inode_ops;
+  inode->i_fop = NULL;
+
+  d_add(child_dentry, inode);
+  return 0;
 }
 
-int vtfs_iterate(struct file *filp, struct dir_context *ctx) {
-    struct dentry *dentry = filp->f_path.dentry;
-    struct inode *inode = dentry->d_inode;
-    int pos = 0;
+int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
+  struct vtfs_file* file = vtfs_find_file(child_dentry->d_name.name, parent_inode->i_ino);
+  if (!file)
+    return -ENOENT;
 
-    if (inode->i_ino != 100)
-        return 0;
+  file->used = 0;
+  return 0;
+}
 
-    if (ctx->pos == pos) {
-        if (!dir_emit(ctx, ".", 1, inode->i_ino, DT_DIR)) return 0;
-        ctx->pos++;
+int vtfs_mkdir(
+    struct mnt_idmap*, struct inode* parent_inode, struct dentry* child_dentry, umode_t mode
+) {
+  const char* name = child_dentry->d_name.name;
+  if (vtfs_find_file(name, parent_inode->i_ino))
+    return -EEXIST;
+
+  int i;
+  for (i = 0; i < MAX_FILES; i++) {
+    if (!vtfs_files[i].used)
+      break;
+  }
+  if (i == MAX_FILES)
+    return -ENOSPC;
+
+  vtfs_files[i].used = 1;
+  strncpy(vtfs_files[i].name, name, MAX_FILENAME - 1);
+  vtfs_files[i].name[MAX_FILENAME - 1] = 0;
+  vtfs_files[i].size = 0;
+  vtfs_files[i].mode = mode | S_IFDIR;
+  vtfs_files[i].ino = next_ino++;
+  vtfs_files[i].type = VTFS_DIR;
+  vtfs_files[i].parent_ino = parent_inode->i_ino;
+
+  struct inode* inode =
+      vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFDIR | mode, vtfs_files[i].ino);
+  if (!inode)
+    return -ENOMEM;
+
+  inode->i_op = &vtfs_inode_ops;
+  inode->i_fop = &vtfs_dir_ops;
+
+  d_add(child_dentry, inode);
+  return 0;
+}
+
+int vtfs_rmdir(struct inode* parent_inode, struct dentry* child_dentry) {
+  struct vtfs_file* dir = vtfs_find_file(child_dentry->d_name.name, parent_inode->i_ino);
+  if (!dir)
+    return -ENOENT;
+  if (dir->type != VTFS_DIR)
+    return -ENOTDIR;
+  int i;
+  for (i = 0; i < MAX_FILES; i++) {
+    if (vtfs_files[i].used && vtfs_files[i].parent_ino == dir->ino) {
+      return -ENOTEMPTY;
     }
-    pos++;
+  }
 
-    if (ctx->pos == pos) {
-        ino_t parent_ino = inode->i_ino;
-        if (dentry->d_parent && dentry->d_parent->d_inode)
-            parent_ino = dentry->d_parent->d_inode->i_ino;
-        if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR)) return 0;
-        ctx->pos++;
-    }
-    pos++;
+  dir->used = 0;
+  return 0;
+}
 
-    int i;
-    for (i = 0; i < MAX_FILES; i++) {
-        if (vtfs_files[i].used) {
-            if (ctx->pos == pos) {
-                if (!dir_emit(ctx, vtfs_files[i].name,
-                              strlen(vtfs_files[i].name),
-                              vtfs_files[i].ino,
-                              DT_REG)) return 0;
-                ctx->pos++;
-            }
-            pos++;
+int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
+  struct dentry* dentry = filp->f_path.dentry;
+  struct inode* inode = dentry->d_inode;
+  ino_t current_dir_ino = inode->i_ino;
+  int pos = 0;
+
+  if (ctx->pos == pos) {
+    if (!dir_emit(ctx, ".", 1, current_dir_ino, DT_DIR))
+      return 0;
+    ctx->pos++;
+  }
+  pos++;
+
+  if (ctx->pos == pos) {
+    ino_t parent_ino = current_dir_ino;
+    if (dentry->d_parent && dentry->d_parent->d_inode)
+      parent_ino = dentry->d_parent->d_inode->i_ino;
+    if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
+      return 0;
+    ctx->pos++;
+  }
+  pos++;
+
+  int i;
+  for (i = 0; i < MAX_FILES; i++) {
+    if (vtfs_files[i].used && vtfs_files[i].parent_ino == current_dir_ino) {
+      if (ctx->pos == pos) {
+        unsigned char d_type;
+        if (vtfs_files[i].type == VTFS_DIR) {
+          d_type = DT_DIR;
+        } else {
+          d_type = DT_REG;
         }
+        if (!dir_emit(
+                ctx, vtfs_files[i].name, strlen(vtfs_files[i].name), vtfs_files[i].ino, d_type
+            ))
+          return 0;
+        ctx->pos++;
+      }
+      pos++;
     }
+  }
 
-    return 0;
+  return 0;
 }
 
-int vtfs_fill_super(struct super_block *sb, void *data, int silent) {
-    struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 100);
-    root->i_op = &vtfs_inode_ops;
-    root->i_fop = &vtfs_dir_ops;
+int vtfs_fill_super(struct super_block* sb, void* data, int silent) {
+  struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 100);
+  root->i_op = &vtfs_inode_ops;
+  root->i_fop = &vtfs_dir_ops;
 
-    sb->s_root = d_make_root(root);
-    if (!sb->s_root)
-        return -ENOMEM;
+  sb->s_root = d_make_root(root);
+  if (!sb->s_root)
+    return -ENOMEM;
 
-    LOG("Superblock filled\n");
-    return 0;
+  int i;
+  for (i = 0; i < MAX_FILES; i++) {
+    if (!vtfs_files[i].used)
+      break;
+  }
+  if (i < MAX_FILES) {
+    vtfs_files[i].used = 1;
+    strncpy(vtfs_files[i].name, ".", MAX_FILENAME - 1);
+    vtfs_files[i].name[MAX_FILENAME - 1] = 0;
+    vtfs_files[i].size = 0;
+    vtfs_files[i].mode = S_IFDIR | 0777;
+    vtfs_files[i].ino = 100;
+    vtfs_files[i].type = VTFS_DIR;
+    vtfs_files[i].parent_ino = 100;
+  }
+
+  LOG("Superblock filled\n");
+  return 0;
 }
 
 struct file_system_type vtfs_fs_type = {
@@ -198,18 +313,18 @@ struct file_system_type vtfs_fs_type = {
 };
 
 static int __init vtfs_init(void) {
-    int ret = register_filesystem(&vtfs_fs_type);
-    if (ret) {
-        pr_err("[vtfs] failed to register filesystem\n");
-        return ret;
-    }
-    LOG("VTFS registered\n");
-    return 0;
+  int ret = register_filesystem(&vtfs_fs_type);
+  if (ret) {
+    pr_err("[vtfs] failed to register filesystem\n");
+    return ret;
+  }
+  LOG("VTFS registered\n");
+  return 0;
 }
 
 static void __exit vtfs_exit(void) {
-    unregister_filesystem(&vtfs_fs_type);
-    LOG("VTFS unregistered\n");
+  unregister_filesystem(&vtfs_fs_type);
+  LOG("VTFS unregistered\n");
 }
 
 module_init(vtfs_init);
