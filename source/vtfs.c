@@ -193,8 +193,9 @@ struct inode* vtfs_get_inode(struct super_block* sb, struct inode* dir, umode_t 
 struct dentry* vtfs_lookup(
     struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag
 ) {
-  char ino_str[32], resp[256];
+  char ino_str[32], resp[256], name[512];
   itostr(ino_str, sizeof(ino_str), parent_inode->i_ino);
+  encode(child_dentry->d_name.name, name);
 
   int64_t ret = vtfs_http_call(
       VTFS_TOKEN,
@@ -205,7 +206,7 @@ struct dentry* vtfs_lookup(
       "parent_ino",
       ino_str,
       "name",
-      child_dentry->d_name.name
+      name
   );
   if (ret < 0)
     return NULL;
