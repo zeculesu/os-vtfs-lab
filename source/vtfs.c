@@ -22,106 +22,115 @@ MODULE_DESCRIPTION("VTFS - simple RAM FS");
 static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static const char b64_pad = '=';
 
-static void itostr(char *buf, size_t size, long val) {
-    if (!buf || size == 0) return;
+static void itostr(char* buf, size_t size, long val) {
+  if (!buf || size == 0)
+    return;
 
-    char tmp[32];
-    int i = 0;
-    int is_negative = 0;
+  char tmp[32];
+  int i = 0;
+  int is_negative = 0;
 
-    if (val < 0) {
-        is_negative = 1;
-        val = -val;
-    }
+  if (val < 0) {
+    is_negative = 1;
+    val = -val;
+  }
 
-    // преобразуем число в обратном порядке
-    do {
-        tmp[i++] = '0' + (val % 10);
-        val /= 10;
-    } while (val > 0 && i < (int)sizeof(tmp));
+  // преобразуем число в обратном порядке
+  do {
+    tmp[i++] = '0' + (val % 10);
+    val /= 10;
+  } while (val > 0 && i < (int)sizeof(tmp));
 
-    if (is_negative)
-        tmp[i++] = '-';
+  if (is_negative)
+    tmp[i++] = '-';
 
-    // копируем в buf в правильном порядке
-    int j = 0;
-    while (i > 0 && j < (int)(size - 1)) {
-        buf[j++] = tmp[--i];
-    }
-    buf[j] = '\0';
+  // копируем в buf в правильном порядке
+  int j = 0;
+  while (i > 0 && j < (int)(size - 1)) {
+    buf[j++] = tmp[--i];
+  }
+  buf[j] = '\0';
 }
 
-static int b64encode(const char *in, size_t inlen, char *out, size_t outlen) {
-    size_t i = 0, j = 0;
-    unsigned char a3[3];
-    unsigned char a4[4];
+static int b64encode(const char* in, size_t inlen, char* out, size_t outlen) {
+  size_t i = 0, j = 0;
+  unsigned char a3[3];
+  unsigned char a4[4];
 
-    while (i < inlen) {
-        size_t k;
-        for (k = 0; k < 3; k++) {
-            if (i < inlen)
-                a3[k] = in[i++];
-            else
-                a3[k] = 0;
-        }
-
-        a4[0] = (a3[0] & 0xfc) >> 2;
-        a4[1] = ((a3[0] & 0x03) << 4) | ((a3[1] & 0xf0) >> 4);
-        a4[2] = ((a3[1] & 0x0f) << 2) | ((a3[2] & 0xc0) >> 6);
-        a4[3] = a3[2] & 0x3f;
-
-        int pad = (i > inlen) ? (3 - (inlen % 3)) : 0;
-
-        int l;
-        for (l = 0; l < 4 - pad; l++) {
-            if (j >= outlen) return -ENOSPC;
-            out[j++] = b64_table[a4[l]];
-        }
-        for (; l < 4; l++) {
-            if (j >= outlen) return -ENOSPC;
-            out[j++] = b64_pad;
-        }
+  while (i < inlen) {
+    size_t k;
+    for (k = 0; k < 3; k++) {
+      if (i < inlen)
+        a3[k] = in[i++];
+      else
+        a3[k] = 0;
     }
 
-    if (j >= outlen) return -ENOSPC;
-    out[j] = '\0';
-    return j;
+    a4[0] = (a3[0] & 0xfc) >> 2;
+    a4[1] = ((a3[0] & 0x03) << 4) | ((a3[1] & 0xf0) >> 4);
+    a4[2] = ((a3[1] & 0x0f) << 2) | ((a3[2] & 0xc0) >> 6);
+    a4[3] = a3[2] & 0x3f;
+
+    int pad = (i > inlen) ? (3 - (inlen % 3)) : 0;
+
+    int l;
+    for (l = 0; l < 4 - pad; l++) {
+      if (j >= outlen)
+        return -ENOSPC;
+      out[j++] = b64_table[a4[l]];
+    }
+    for (; l < 4; l++) {
+      if (j >= outlen)
+        return -ENOSPC;
+      out[j++] = b64_pad;
+    }
+  }
+
+  if (j >= outlen)
+    return -ENOSPC;
+  out[j] = '\0';
+  return j;
 }
 
-static int b64decode(const char *in, char *out, size_t outlen) {
-    int decoding_table[256];
-    int i, j;
-    for (i = 0; i < 256; i++) decoding_table[i] = -1;
-    for (i = 0; i < 64; i++) decoding_table[(unsigned char)b64_table[i]] = i;
+static int b64decode(const char* in, char* out, size_t outlen) {
+  int decoding_table[256];
+  int i, j;
+  for (i = 0; i < 256; i++)
+    decoding_table[i] = -1;
+  for (i = 0; i < 64; i++)
+    decoding_table[(unsigned char)b64_table[i]] = i;
 
-    size_t inlen = strlen(in);
-    size_t pos = 0;
-    unsigned char a3[3], a4[4];
+  size_t inlen = strlen(in);
+  size_t pos = 0;
+  unsigned char a3[3], a4[4];
 
-    for (i = 0; i < inlen; i += 4) {
-        int l;
-        for (l = 0; l < 4; l++) {
-            if (i + l < inlen)
-                a4[l] = decoding_table[(unsigned char)in[i + l]];
-            else
-                a4[l] = 0;
-        }
-
-        a3[0] = (a4[0] << 2) | ((a4[1] & 0x30) >> 4);
-        a3[1] = ((a4[1] & 0x0f) << 4) | ((a4[2] & 0x3c) >> 2);
-        a3[2] = ((a4[2] & 0x03) << 6) | a4[3];
-
-        int out_bytes = 3;
-        if (in[i + 2] == b64_pad) out_bytes = 1;
-        else if (in[i + 3] == b64_pad) out_bytes = 2;
-
-        for (j = 0; j < out_bytes; j++) {
-            if (pos >= outlen) return -ENOSPC;
-            out[pos++] = a3[j];
-        }
+  for (i = 0; i < inlen; i += 4) {
+    int l;
+    for (l = 0; l < 4; l++) {
+      if (i + l < inlen)
+        a4[l] = decoding_table[(unsigned char)in[i + l]];
+      else
+        a4[l] = 0;
     }
 
-    return pos;
+    a3[0] = (a4[0] << 2) | ((a4[1] & 0x30) >> 4);
+    a3[1] = ((a4[1] & 0x0f) << 4) | ((a4[2] & 0x3c) >> 2);
+    a3[2] = ((a4[2] & 0x03) << 6) | a4[3];
+
+    int out_bytes = 3;
+    if (in[i + 2] == b64_pad)
+      out_bytes = 1;
+    else if (in[i + 3] == b64_pad)
+      out_bytes = 2;
+
+    for (j = 0; j < out_bytes; j++) {
+      if (pos >= outlen)
+        return -ENOSPC;
+      out[pos++] = a3[j];
+    }
+  }
+
+  return pos;
 }
 
 struct dentry* vtfs_mount(
@@ -339,35 +348,60 @@ int vtfs_rmdir(struct inode* parent_inode, struct dentry* child_dentry) {
 }
 
 ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* offset) {
-    char ino_str[32], off_str[32], len_str[32], resp[8192];
-    itostr(ino_str, sizeof(ino_str), filp->f_inode->i_ino);
-    itostr(off_str, sizeof(off_str), *offset);
-    itostr(len_str, sizeof(len_str), len);
+  char ino_str[32], off_str[32], len_str[32], resp[8192];
+  itostr(ino_str, sizeof(ino_str), filp->f_inode->i_ino);
+  itostr(off_str, sizeof(off_str), *offset);
+  itostr(len_str, sizeof(len_str), len);
 
-    int64_t ret = vtfs_http_call(VTFS_TOKEN, "read", resp, sizeof(resp),
-                                 3, "ino", ino_str, "offset", off_str, "length", len_str);
-    if (ret < 0) return ret;
+  int64_t ret = vtfs_http_call(
+      VTFS_TOKEN,
+      "read",
+      resp,
+      sizeof(resp),
+      3,
+      "ino",
+      ino_str,
+      "offset",
+      off_str,
+      "length",
+      len_str
+  );
+  if (ret < 0)
+    return ret;
 
-    int decoded = b64decode(resp, buffer, len);
-    *offset += decoded;
-    return decoded;
+  int decoded = b64decode(resp, buffer, len);
+  *offset += decoded;
+  return decoded;
 }
 
 ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* offset) {
-    char ino_str[32], off_str[32], data_b64[8192], resp[32];
-    itostr(ino_str, sizeof(ino_str), filp->f_inode->i_ino);
-    itostr(off_str, sizeof(off_str), *offset);
+  char ino_str[32], off_str[32], data_b64[8192], resp[32];
+  itostr(ino_str, sizeof(ino_str), filp->f_inode->i_ino);
+  itostr(off_str, sizeof(off_str), *offset);
 
-    int b64len = b64encode(buffer, len, data_b64, sizeof(data_b64));
-    if (b64len < 0) return -ENOSPC;
+  int b64len = b64encode(buffer, len, data_b64, sizeof(data_b64));
+  if (b64len < 0)
+    return -ENOSPC;
 
-    int64_t ret = vtfs_http_call(VTFS_TOKEN, "write", resp, sizeof(resp),
-                                 3, "ino", ino_str, "offset", off_str, "data", data_b64);
-    if (ret < 0) return ret;
+  int64_t ret = vtfs_http_call(
+      VTFS_TOKEN,
+      "write",
+      resp,
+      sizeof(resp),
+      3,
+      "ino",
+      ino_str,
+      "offset",
+      off_str,
+      "data",
+      data_b64
+  );
+  if (ret < 0)
+    return ret;
 
-    *offset += len;
-    filp->f_inode->i_size += len;
-    return len;
+  *offset += len;
+  filp->f_inode->i_size += len;
+  return len;
 }
 
 int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry* new_dentry) {
@@ -403,62 +437,47 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
-    char ino_str[32], resp[8192];
-    itostr(ino_str, sizeof(ino_str), filp->f_inode->i_ino);
+  if (ctx->pos == 0) {
+    if (!dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR))
+      return 0;
+    ctx->pos++;
+  }
+  if (ctx->pos == 1) {
+    ino_t parent_ino = filp->f_inode->i_ino;
+    if (filp->f_path.dentry->d_parent && filp->f_path.dentry->d_parent->d_inode)
+      parent_ino = filp->f_path.dentry->d_parent->d_inode->i_ino;
+    if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
+      return 0;
+    ctx->pos++;
+  }
 
-    int64_t ret = vtfs_http_call(VTFS_TOKEN, "list", resp, sizeof(resp),
-                                 1, "parent_ino", ino_str);
-    if (ret < 0)
-        return ret;
+  char response[2048];
+  char ino[16];
+  snprintf(ino, sizeof(ino), "%lu", filp->f_inode->i_ino);
 
-    char* line = resp;
-    char* next;
-    int idx = 0;
+  int64_t ret = vtfs_http_call("token", "list", response, sizeof(response), 1, "parent_ino", ino);
+  if (ret < 0)
+    return ret;
 
-    if (ctx->pos == 0) {
-        if (!dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR))
-            return 0;
-        ctx->pos++;
-    }
-    if (ctx->pos == 1) {
-        ino_t parent_ino = filp->f_inode->i_ino;
-        if (filp->f_path.dentry->d_parent && filp->f_path.dentry->d_parent->d_inode)
-            parent_ino = filp->f_path.dentry->d_parent->d_inode->i_ino;
-        if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
-            return 0;
-        ctx->pos++;
-    }
+  char* p = response;
+  while (*p) {
+    ino_t child_ino;
+    char name[64], type[8];
 
-    idx = 2;
+    char* nl = strchr(p, '\n');
+    if (!nl)
+      break;
+    *nl = 0;
 
-    while (line && *line) {
-        next = strchr(line, '\n');
-        if (next) *next++ = 0;
+    if (sscanf(p, "%lu %63s %7s", &child_ino, name, type) == 3)
+      dir_emit(ctx, name, strlen(name), child_ino, strcmp(type, "dir") == 0 ? DT_DIR : DT_REG);
 
-        if (ctx->pos == idx) {
-            unsigned long ino;
-            char type[16];
-            umode_t mode;
-            char name[256];
+    ctx->pos++;
+    p = nl + 1;
+  }
 
-            if (sscanf(line, "%lu %15s %o %255[^\n]", &ino, type, &mode, name) != 4)
-                return -EIO;
-
-            unsigned char d_type = (strcmp(type, "dir") == 0) ? DT_DIR : DT_REG;
-
-            if (!dir_emit(ctx, name, strlen(name), ino, d_type))
-                return 0;
-
-            ctx->pos++; 
-        }
-
-        idx++;
-        line = next;
-    }
-
-    return 0;
+  return 0;
 }
-
 
 int vtfs_fill_super(struct super_block* sb, void* data, int silent) {
   struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 100);
