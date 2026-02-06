@@ -402,37 +402,63 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
-  char ino_str[32], resp[4096];
-  itostr(ino_str, sizeof(ino_str), filp->f_inode->i_ino);
+    char ino_str[32], resp[8192];
+    itostr(ino_str, sizeof(ino_str), filp->f_inode->i_ino);
 
-  int64_t ret = vtfs_http_call(VTFS_TOKEN, "list", resp, sizeof(resp), 1, "parent_ino", ino_str);
-  if (ret < 0)
-    return ret;
+    int64_t ret = vtfs_http_call(VTFS_TOKEN, "list", resp, sizeof(resp),
+                                 1, "parent_ino", ino_str);
+    if (ret < 0)
+        return ret;
 
-  char* line = resp;
-  char* next;
-  while (line && *line) {
-    next = strchr(line, '\n');
-    if (next)
-      *next++ = 0;
+    char* line = resp;
+    char* next;
+    int idx = 0;
 
-    unsigned long ino;
-    char type[16];
-    umode_t mode;
-    char name[256];
+    // . и ..
+    if (ctx->pos == 0) {
+        if (!dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR))
+            return 0;
+        ctx->pos++;
+    }
+    if (ctx->pos == 1) {
+        ino_t parent_ino = filp->f_inode->i_ino;
+        if (filp->f_path.dentry->d_parent && filp->f_path.dentry->d_parent->d_inode)
+            parent_ino = filp->f_path.dentry->d_parent->d_inode->i_ino;
+        if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
+            return 0;
+        ctx->pos++;
+    }
 
-    sscanf(line, "%lu %15s %ho %255[^\n]", &ino, type, &mode, name);
-    unsigned char d_type = (strcmp(type, "dir") == 0) ? DT_DIR : DT_REG;
+    idx = 2; // теперь позиции для файлов начинаются с 2
 
-    if (!dir_emit(ctx, name, strlen(name), ino, d_type))
-      break;
-    ctx->pos++;
+    while (line && *line) {
+        next = strchr(line, '\n');
+        if (next) *next++ = 0;
 
-    line = next;
-  }
+        if (ctx->pos <= idx) {
+            unsigned long ino;
+            char type[16];
+            umode_t mode;
+            char name[256];
 
-  return 0;
+            if (sscanf(line, "%lu %15s %o %255[^\n]", &ino, type, &mode, name) != 4)
+                return -EIO;
+
+            unsigned char d_type = (strcmp(type, "dir") == 0) ? DT_DIR : DT_REG;
+
+            if (!dir_emit(ctx, name, strlen(name), ino, d_type))
+                return 0;
+
+            ctx->pos++;
+        }
+
+        idx++;
+        line = next;
+    }
+
+    return 0;
 }
+
 
 int vtfs_fill_super(struct super_block* sb, void* data, int silent) {
   struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 100);
