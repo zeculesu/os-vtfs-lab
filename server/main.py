@@ -43,16 +43,20 @@ def fs_method(method):
 
     if method == "list":
         parent_ino = int(args["parent_ino"])
-        cur = db.execute(
-            "SELECT ino, name, type FROM files WHERE parent_ino=?",
-            (parent_ino,)
-        )
-
+        cur = db.execute("SELECT ino, name, type FROM files WHERE parent_ino=?", (parent_ino,))
         out = ""
         for row in cur.fetchall():
             out += f"{row['ino']} {row['name']} {row['type']}\n"
-
         return out
+    
+    elif method == "lookup":
+        ino = int(args["parent_ino"])
+        name = args["name"]
+        cur = db.execute("SELECT ino, name, type, mode FROM files WHERE parent_ino=? AND name=?", (ino, name))
+        row = cur.fetchone()
+        if not row:
+            return "", 404
+        return f"{row['ino']} {row['type']} {row['mode']}"
 
     elif method == "create":
         name = args["name"]

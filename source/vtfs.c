@@ -208,7 +208,7 @@ ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* off) {
 ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* off) {
   char ino[16], offset[16], data[4096];
   snprintf(ino, 16, "%lu", filp->f_inode->i_ino);
-  snprintf(offset, 16, "%d", *offset);
+  snprintf(offset, 16, "%lld", *off);
 
   if (copy_from_user(data, buffer, len))
     return -EFAULT;
