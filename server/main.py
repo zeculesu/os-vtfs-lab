@@ -65,7 +65,7 @@ def fs_method(method):
         db.execute("INSERT INTO files (name, parent_ino, type, data, mode) VALUES (?, ?, 'file', ?, ?)",
                    (name, parent_ino, b"", mode))
         db.commit()
-        return jsonify({"status": "ok"})
+        return "ok", 200, {'Content-Type': 'text/plain'}
 
     elif method == "mkdir":
         name = args["name"]
@@ -74,15 +74,17 @@ def fs_method(method):
         db.execute("INSERT INTO files (name, parent_ino, type, data, mode) VALUES (?, ?, 'dir', NULL, ?)",
                    (name, parent_ino, mode))
         db.commit()
-        return jsonify({"status": "ok"})
+        return "ok", 200, {'Content-Type': 'text/plain'}
+
 
     elif method == "read":
         ino = int(args["ino"])
         cur = db.execute("SELECT data FROM files WHERE ino=? AND type='file'", (ino,))
         row = cur.fetchone()
         if row is None:
-            return jsonify({"error": "not found"}), 404
+            return "error": "not found", 404, {'Content-Type': 'text/plain'}
         return row["data"]
+    
     
     elif method == "write":
         ino = int(args["ino"])
@@ -96,16 +98,16 @@ def fs_method(method):
         new_data = old_data[:offset] + data
         db.execute("UPDATE files SET data=? WHERE ino=?", (new_data, ino))
         db.commit()
-        return jsonify({"status": "ok"})
+        return "ok", 200, {'Content-Type': 'text/plain'}
 
     elif method == "unlink":
         ino = int(args["ino"])
         db.execute("DELETE FROM files WHERE ino=?", (ino,))
         db.commit()
-        return jsonify({"status": "ok"})
+        return "ok", 200, {'Content-Type': 'text/plain'}
 
     else:
-        return jsonify({"error": "unknown method"}), 400
+        return "error", 400, {'Content-Type': 'text/plain'}
 
 if __name__ == "__main__":
     with app.app_context():

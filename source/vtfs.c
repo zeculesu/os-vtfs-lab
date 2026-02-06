@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
+
 #include "http.h"
 
 #define MODULE_NAME "vtfs"
@@ -107,8 +108,9 @@ struct dentry* vtfs_lookup(struct inode* dir, struct dentry* dentry, unsigned in
   umode_t mode;
   sscanf(response, "%lu %s %ho", &ino, type, &mode);
 
-  struct inode* inode =
-      vtfs_get_inode(dir->i_sb, dir, (strcmp(type, "dir") == 0 ? S_IFDIR : S_IFREG) | mode, ino);
+  struct inode* inode = vtfs_get_inode(
+      dir->i_sb, dir, (strcmp(type, "dir") == 0 ? S_IFDIR : S_IFREG) | (mode & 0777), ino
+  );
 
   inode->i_op = &vtfs_inode_ops;
   inode->i_fop = strcmp(type, "dir") == 0 ? &vtfs_dir_ops : &vtfs_file_ops;
@@ -221,7 +223,7 @@ ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* of
   if (ret < 0)
     return ret;
 
-  *offset += len;
+  *off += len;
   return len;
 }
 
@@ -248,37 +250,50 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
-    if (ctx->pos)
-        return 0;
+  loff_t pos = 0;
 
-    char response[2048];
-    char ino[16];
-    snprintf(ino, sizeof(ino), "%lu", filp->f_inode->i_ino);
+  if (ctx->pos <= pos) {
+    if (!dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR))
+      return 0;
+    ctx->pos = ++pos;
+  }
 
-    int64_t ret = vtfs_http_call("token", "list", response, sizeof(response), 1, "parent_ino", ino);
-    if (ret < 0)
-        return ret;
+  if (ctx->pos <= pos) {
+    ino_t parent_ino = filp->f_inode->i_ino;
+    if (filp->f_inode->i_ino != 0)
+      parent_ino = filp->f_inode->i_sb->s_root->d_inode->i_ino;
+    if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
+      return 0;
+    ctx->pos = ++pos;
+  }
 
-    char* p = response;
-    while (*p) {
-        ino_t child_ino;
-        char name[64], type[8];
+  char response[2048];
+  char ino[16];
+  snprintf(ino, sizeof(ino), "%lu", filp->f_inode->i_ino);
 
-        char* nl = strchr(p, '\n');
-        if (!nl)
-            break;
-        *nl = 0;
+  int64_t ret = vtfs_http_call("token", "list", response, sizeof(response), 1, "parent_ino", ino);
+  if (ret < 0)
+    return ret;
 
-        if (sscanf(p, "%lu %63s %7s", &child_ino, name, type) == 3)
-            dir_emit(ctx, name, strlen(name), child_ino, strcmp(type, "dir") == 0 ? DT_DIR : DT_REG);
+  char* p = response;
+  while (*p) {
+    ino_t child_ino;
+    char name[64], type[8];
 
-        p = nl + 1;
-    }
+    char* nl = strchr(p, '\n');
+    if (!nl)
+      break;
+    *nl = 0;
 
-    ctx->pos = 1;
-    return 0;
+    if (sscanf(p, "%lu %63s %7s", &child_ino, name, type) == 3)
+      dir_emit(ctx, name, strlen(name), child_ino, strcmp(type, "dir") == 0 ? DT_DIR : DT_REG);
+
+    p = nl + 1;
+  }
+
+  ctx->pos = pos + 1;
+  return 0;
 }
-
 
 int vtfs_fill_super(struct super_block* sb, void* data, int silent) {
   struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 0);
