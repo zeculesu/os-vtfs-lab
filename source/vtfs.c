@@ -250,22 +250,13 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
-  loff_t pos = 0;
+  if (ctx->pos)
+    return 0;
 
-  if (ctx->pos <= pos) {
-    if (!dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR))
-      return 0;
-    ctx->pos = ++pos;
-  }
+  dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR);
+  dir_emit(ctx, "..", 2, filp->f_inode->i_sb->s_root->d_inode->i_ino, DT_DIR);
 
-  if (ctx->pos <= pos) {
-    ino_t parent_ino = filp->f_inode->i_ino;
-    if (filp->f_inode->i_ino != 0)
-      parent_ino = filp->f_inode->i_sb->s_root->d_inode->i_ino;
-    if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
-      return 0;
-    ctx->pos = ++pos;
-  }
+  ctx->pos = 2;
 
   char response[2048];
   char ino[16];
@@ -291,7 +282,7 @@ int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
     p = nl + 1;
   }
 
-  ctx->pos = pos + 1;
+  ctx->pos = 3;
   return 0;
 }
 
