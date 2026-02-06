@@ -212,3 +212,5 @@ void encode(const char *src, char *dst) {
   }
   *dst = '\0';
 }
+
+EXPORT_SYMBOL(vtfs_http_call);

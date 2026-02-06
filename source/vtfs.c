@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
+#include "http.h"
 
 #define MODULE_NAME "vtfs"
 MODULE_LICENSE("GPL");
@@ -14,31 +15,6 @@ MODULE_AUTHOR("secs-dev");
 MODULE_DESCRIPTION("VTFS - simple RAM FS");
 
 #define LOG(fmt, ...) pr_info("[" MODULE_NAME "]: " fmt, ##__VA_ARGS__)
-
-#define MAX_FILES 16
-#define MAX_FILENAME 32
-#define MAX_FILE_SIZE 4096
-
-enum vtfs_type { VTFS_FILE, VTFS_DIR };
-
-struct vtfs_inode_data {
-  char data[MAX_FILE_SIZE];
-  size_t size;
-  int link_count;
-};
-
-struct vtfs_file {
-  char name[MAX_FILENAME];
-  umode_t mode;
-  ino_t ino;
-  int used;
-  enum vtfs_type type;
-  ino_t parent_ino;
-  struct vtfs_inode_data* idata;
-};
-
-static struct vtfs_file vtfs_files[MAX_FILES];
-static ino_t next_ino = 101;
 
 struct dentry* vtfs_mount(
     struct file_system_type* fs_type, int flags, const char* token, void* data
@@ -63,32 +39,6 @@ int vtfs_rmdir(struct inode*, struct dentry*);
 ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* offset);
 ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* offset);
 int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry* new_dentry);
-
-static struct vtfs_file* vtfs_find_primary_file(ino_t ino) {
-  for (int i = 0; i < MAX_FILES; i++) {
-    if (vtfs_files[i].used && vtfs_files[i].ino == ino) {
-      return &vtfs_files[i];
-    }
-  }
-  return NULL;
-}
-
-static struct vtfs_file* vtfs_find_file_by_ino(ino_t ino) {
-  for (int i = 0; i < MAX_FILES; i++) {
-    if (vtfs_files[i].used && vtfs_files[i].ino == ino)
-      return &vtfs_files[i];
-  }
-  return NULL;
-}
-static struct vtfs_file* vtfs_find_file(const char* name, ino_t parent_ino) {
-  int i;
-  for (i = 0; i < MAX_FILES; i++) {
-    if (vtfs_files[i].used && vtfs_files[i].parent_ino == parent_ino &&
-        !strcmp(vtfs_files[i].name, name))
-      return &vtfs_files[i];
-  }
-  return NULL;
-}
 
 struct inode_operations vtfs_inode_ops = {
     .lookup = vtfs_lookup,
@@ -132,35 +82,38 @@ struct inode* vtfs_get_inode(struct super_block* sb, struct inode* dir, umode_t 
   return inode;
 }
 
-struct dentry* vtfs_lookup(
-    struct inode* parent_inode, struct dentry* child_dentry, unsigned int flag
-) {
-  const char* name = child_dentry->d_name.name;
-  struct vtfs_file* file = vtfs_find_file(name, parent_inode->i_ino);
-  if (!file || file->parent_ino != parent_inode->i_ino)
+struct dentry* vtfs_lookup(struct inode* dir, struct dentry* dentry, unsigned int flags) {
+  char response[1024];
+  char parent_ino[16];
+  snprintf(parent_ino, 16, "%lu", dir->i_ino);
+
+  int64_t ret = vtfs_http_call(
+      "token",
+      "lookup",
+      response,
+      sizeof(response),
+      2,
+      "parent_ino",
+      parent_ino,
+      "name",
+      dentry->d_name.name
+  );
+
+  if (ret < 0)
     return NULL;
 
+  ino_t ino;
+  char type[8];
   umode_t mode;
-  if (file->type == VTFS_DIR) {
-    mode = S_IFDIR | (file->mode & ~S_IFMT);
-  } else {
-    mode = S_IFREG | (file->mode & ~S_IFMT);
-  }
+  sscanf(response, "%lu %s %ho", &ino, type, &mode);
 
-  struct inode* inode = vtfs_get_inode(parent_inode->i_sb, parent_inode, mode, file->ino);
+  struct inode* inode =
+      vtfs_get_inode(dir->i_sb, dir, (strcmp(type, "dir") == 0 ? S_IFDIR : S_IFREG) | mode, ino);
 
-  if (!inode)
-    return NULL;
+  inode->i_op = &vtfs_inode_ops;
+  inode->i_fop = strcmp(type, "dir") == 0 ? &vtfs_dir_ops : &vtfs_file_ops;
 
-  if (file->type == VTFS_DIR) {
-    inode->i_op = &vtfs_inode_ops;
-    inode->i_fop = &vtfs_dir_ops;
-  } else {
-    inode->i_op = &vtfs_inode_ops;
-    inode->i_fop = &vtfs_file_ops;
-  }
-
-  d_add(child_dentry, inode);
+  d_add(dentry, inode);
   return NULL;
 }
 
@@ -171,32 +124,32 @@ int vtfs_create(
     umode_t mode,
     bool excl
 ) {
-  const char* name = child_dentry->d_name.name;
-  int i;
-  for (i = 0; i < MAX_FILES; i++)
-    if (!vtfs_files[i].used)
-      break;
-  if (i == MAX_FILES)
-    return -ENOSPC;
+  char response[256];
+  char parent_ino[16];
+  snprintf(parent_ino, 16, "%lu", parent_inode->i_ino);
 
-  vtfs_files[i].used = 1;
-  strncpy(vtfs_files[i].name, name, MAX_FILENAME - 1);
-  vtfs_files[i].name[MAX_FILENAME - 1] = 0;
-  vtfs_files[i].mode = mode;
-  vtfs_files[i].ino = next_ino++;
-  vtfs_files[i].parent_ino = parent_inode->i_ino;
-  vtfs_files[i].type = VTFS_FILE;
+  int64_t ret = vtfs_http_call(
+      "token",
+      "create",
+      response,
+      sizeof(response),
+      3,
+      "parent_ino",
+      parent_ino,
+      "name",
+      child_dentry->d_name.name,
+      "mode",
+      "666"
+  );
 
-  vtfs_files[i].idata = kzalloc(sizeof(struct vtfs_inode_data), GFP_KERNEL);
-  if (!vtfs_files[i].idata) {
-    vtfs_files[i].used = 0;
-    return -ENOMEM;
-  }
-  vtfs_files[i].idata->size = 0;
-  vtfs_files[i].idata->link_count = 1;
+  if (ret < 0)
+    return -EIO;
 
-  struct inode* inode =
-      vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFREG | mode, vtfs_files[i].ino);
+  ino_t ino;
+  sscanf(response, "%lu", &ino);
+
+  struct inode* inode = vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFREG | mode, ino);
+
   inode->i_op = &vtfs_inode_ops;
   inode->i_fop = &vtfs_file_ops;
   d_add(child_dentry, inode);
@@ -204,202 +157,115 @@ int vtfs_create(
 }
 
 int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
-  struct vtfs_file* f = vtfs_find_file(child_dentry->d_name.name, parent_inode->i_ino);
-  if (!f)
-    return -ENOENT;
+  char ino[16];
+  snprintf(ino, 16, "%lu", child_dentry->d_inode->i_ino);
 
-  if (f->type == VTFS_FILE) {
-    f->idata->link_count--;
-    if (f->idata->link_count == 0) {
-      kfree(f->idata);
-    }
-  }
-  f->used = 0;
-  return 0;
+  return vtfs_http_call("token", "unlink", NULL, 0, 1, "ino", ino) < 0 ? -EIO : 0;
 }
 
 int vtfs_mkdir(
     struct mnt_idmap*, struct inode* parent_inode, struct dentry* child_dentry, umode_t mode
 ) {
-  const char* name = child_dentry->d_name.name;
-  if (vtfs_find_file(name, parent_inode->i_ino))
-    return -EEXIST;
+  char parent[16];
+  snprintf(parent, 16, "%lu", parent_inode->i_ino);
 
-  int i;
-  for (i = 0; i < MAX_FILES; i++) {
-    if (!vtfs_files[i].used)
-      break;
-  }
-  if (i == MAX_FILES)
-    return -ENOSPC;
+  int64_t ret = vtfs_http_call(
+      "token", "mkdir", NULL, 0, 2, "parent_ino", parent, "name", child_dentry->d_name.name
+  );
 
-  vtfs_files[i].used = 1;
-  strncpy(vtfs_files[i].name, name, MAX_FILENAME - 1);
-  vtfs_files[i].name[MAX_FILENAME - 1] = 0;
-  if (vtfs_files[i].idata)
-    vtfs_files[i].idata->size = 0;
-  vtfs_files[i].mode = mode | S_IFDIR;
-  vtfs_files[i].ino = next_ino++;
-  vtfs_files[i].type = VTFS_DIR;
-  vtfs_files[i].parent_ino = parent_inode->i_ino;
-
-  struct inode* inode =
-      vtfs_get_inode(parent_inode->i_sb, parent_inode, S_IFDIR | mode, vtfs_files[i].ino);
-  if (!inode)
-    return -ENOMEM;
-
-  inode->i_op = &vtfs_inode_ops;
-  inode->i_fop = &vtfs_dir_ops;
-
-  d_add(child_dentry, inode);
-  return 0;
+  return ret < 0 ? -EIO : 0;
 }
 
 int vtfs_rmdir(struct inode* parent_inode, struct dentry* child_dentry) {
-  struct vtfs_file* dir = vtfs_find_file(child_dentry->d_name.name, parent_inode->i_ino);
-  if (!dir)
-    return -ENOENT;
-  if (dir->type != VTFS_DIR)
-    return -ENOTDIR;
-  int i;
-  for (i = 0; i < MAX_FILES; i++) {
-    if (vtfs_files[i].used && vtfs_files[i].parent_ino == dir->ino) {
-      return -ENOTEMPTY;
-    }
-  }
+  char ino[16];
+  snprintf(ino, 16, "%lu", child_dentry->d_inode->i_ino);
 
-  dir->used = 0;
-  return 0;
+  return vtfs_http_call("token", "rmdir", NULL, 0, 1, "ino", ino) < 0 ? -EIO : 0;
 }
 
-ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* offset) {
-  struct vtfs_file* f = vtfs_find_primary_file(filp->f_inode->i_ino);
-  if (!f)
-    return -ENOENT;
-  if (f->type != VTFS_FILE)
-    return -EISDIR;
+ssize_t vtfs_read(struct file* filp, char* buffer, size_t len, loff_t* off) {
+  char response[4096];
+  char ino[16], offset[16], size[16];
 
-  if (*offset >= f->idata->size)
-    return 0;
+  snprintf(ino, 16, "%lu", filp->f_inode->i_ino);
+  snprintf(offset, 16, "%lld", *off);
+  snprintf(size, 16, "%zu", len);
 
-  size_t to_read = min(len, f->idata->size - *offset);
-  if (copy_to_user(buffer, f->idata->data + *offset, to_read))
+  int64_t ret = vtfs_http_call(
+      "token", "read", response, sizeof(response), 3, "ino", ino, "offset", offset, "size", size
+  );
+
+  if (ret <= 0)
+    return ret;
+
+  if (copy_to_user(buffer, response, ret))
     return -EFAULT;
 
-  *offset += to_read;
-  return to_read;
+  *off += ret;
+  return ret;
 }
 
-ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* offset) {
-  struct vtfs_file* f = vtfs_find_primary_file(filp->f_inode->i_ino);
-  if (!f)
-    return -ENOENT;
-  if (f->type != VTFS_FILE)
-    return -EISDIR;
+ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* off) {
+  char ino[16], offset[16], data[4096];
+  snprintf(ino, 16, "%lu", filp->f_inode->i_ino);
+  snprintf(offset, 16, "%d", *offset);
 
-  if (filp->f_flags & O_TRUNC) {
-    f->idata->size = 0;
-    *offset = 0;
-  }
-
-  if (*offset + len > MAX_FILE_SIZE)
-    return -ENOSPC;
-  if (copy_from_user(f->idata->data + *offset, buffer, len))
+  if (copy_from_user(data, buffer, len))
     return -EFAULT;
 
-  size_t new_end = *offset + len;
-  if (new_end > f->idata->size)
-    f->idata->size = new_end;
-  filp->f_inode->i_size = f->idata->size;
+  data[len] = 0;
+
+  int64_t ret =
+      vtfs_http_call("token", "write", NULL, 0, 3, "ino", ino, "offset", offset, "data", data);
+
+  if (ret < 0)
+    return ret;
 
   *offset += len;
   return len;
 }
 
 int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry* new_dentry) {
-  struct inode* old_inode = old_dentry->d_inode;
-  struct vtfs_file* old_file = vtfs_find_file_by_ino(old_inode->i_ino);
-  if (!old_file)
-    return -ENOENT;
-  if (old_file->type == VTFS_DIR)
-    return -EPERM;
+  char old[16], parent[16];
+  snprintf(old, 16, "%lu", old_dentry->d_inode->i_ino);
+  snprintf(parent, 16, "%lu", parent_dir->i_ino);
 
-  const char* new_name = new_dentry->d_name.name;
-  if (vtfs_find_file(new_name, parent_dir->i_ino))
-    return -EEXIST;
-
-  int i;
-  for (i = 0; i < MAX_FILES; i++)
-    if (!vtfs_files[i].used)
-      break;
-  if (i == MAX_FILES)
-    return -ENOSPC;
-
-  vtfs_files[i].used = 1;
-  strncpy(vtfs_files[i].name, new_name, MAX_FILENAME - 1);
-  vtfs_files[i].name[MAX_FILENAME - 1] = 0;
-  vtfs_files[i].ino = old_file->ino;
-  vtfs_files[i].parent_ino = parent_dir->i_ino;
-  vtfs_files[i].type = VTFS_FILE;
-  vtfs_files[i].mode = old_file->mode;
-  vtfs_files[i].idata = old_file->idata;
-
-  vtfs_files[i].idata->link_count++;
-
-  struct inode* new_inode =
-      vtfs_get_inode(parent_dir->i_sb, parent_dir, old_file->mode, old_file->ino);
-  if (!new_inode)
-    return -ENOMEM;
-
-  inc_nlink(new_inode);
-  new_inode->i_op = &vtfs_inode_ops;
-  new_inode->i_fop = &vtfs_file_ops;
-  d_add(new_dentry, new_inode);
-
-  return 0;
+  return vtfs_http_call(
+             "token",
+             "link",
+             NULL,
+             0,
+             3,
+             "ino",
+             old,
+             "parent_ino",
+             parent,
+             "name",
+             new_dentry->d_name.name
+         ) < 0
+             ? -EIO
+             : 0;
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
-  struct dentry* dentry = filp->f_path.dentry;
-  struct inode* inode = dentry->d_inode;
-  ino_t current_dir_ino = inode->i_ino;
-  int pos = 0;
+  char response[2048];
+  char ino[16];
+  snprintf(ino, 16, "%lu", filp->f_inode->i_ino);
 
-  if (ctx->pos == pos) {
-    if (!dir_emit(ctx, ".", 1, current_dir_ino, DT_DIR))
-      return 0;
-    ctx->pos++;
-  }
-  pos++;
+  int64_t ret = vtfs_http_call("token", "list", response, sizeof(response), 1, "parent_ino", ino);
 
-  if (ctx->pos == pos) {
-    ino_t parent_ino = current_dir_ino;
-    if (dentry->d_parent && dentry->d_parent->d_inode)
-      parent_ino = dentry->d_parent->d_inode->i_ino;
-    if (!dir_emit(ctx, "..", 2, parent_ino, DT_DIR))
-      return 0;
-    ctx->pos++;
-  }
-  pos++;
+  if (ret < 0)
+    return ret;
 
-  int i;
-  for (i = 0; i < MAX_FILES; i++) {
-    if (vtfs_files[i].used && vtfs_files[i].parent_ino == current_dir_ino) {
-      if (ctx->pos == pos) {
-        unsigned char d_type;
-        if (vtfs_files[i].type == VTFS_DIR) {
-          d_type = DT_DIR;
-        } else {
-          d_type = DT_REG;
-        }
-        if (!dir_emit(
-                ctx, vtfs_files[i].name, strlen(vtfs_files[i].name), vtfs_files[i].ino, d_type
-            ))
-          return 0;
-        ctx->pos++;
-      }
-      pos++;
-    }
+  char* p = response;
+  while (*p) {
+    ino_t child_ino;
+    char name[64], type[8];
+    sscanf(p, "%lu %63s %7s\n", &child_ino, name, type);
+
+    dir_emit(ctx, name, strlen(name), child_ino, strcmp(type, "dir") == 0 ? DT_DIR : DT_REG);
+
+    p = strchr(p, '\n') + 1;
   }
 
   return 0;
