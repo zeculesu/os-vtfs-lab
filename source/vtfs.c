@@ -297,22 +297,27 @@ ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* of
   if (f->type != VTFS_FILE)
     return -EISDIR;
 
-  if (filp->f_flags & O_TRUNC) {
-    f->idata->size = 0;
-    *offset = 0;
+  size_t write_pos;
+  if (filp->f_flags & O_APPEND) {
+    write_pos = f->idata->size;
+  } else {
+    write_pos = *offset;
   }
 
-  if (*offset + len > MAX_FILE_SIZE)
+  new_size = write_pos + len;
+  if (write_pos + len > MAX_FILE_SIZE)
     return -ENOSPC;
-  if (copy_from_user(f->idata->data + *offset, buffer, len))
+  if (copy_from_user(f->idata->data + write_pos, buffer, len))
     return -EFAULT;
 
-  size_t new_end = *offset + len;
-  if (new_end > f->idata->size)
+  size_t new_end = write_pos + len;
+  if (new_end > f->idata->size) {
     f->idata->size = new_end;
+  }
+
   filp->f_inode->i_size = f->idata->size;
 
-  *offset += len;
+  *offset = write_pos + len;
   return len;
 }
 
