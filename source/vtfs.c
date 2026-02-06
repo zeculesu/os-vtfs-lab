@@ -195,7 +195,7 @@ struct dentry* vtfs_lookup(
 ) {
   char ino_str[32], resp[256], name[512];
   itostr(ino_str, sizeof(ino_str), parent_inode->i_ino);
-  encode(child_dentry->d_name.name, name);
+  // encode(child_dentry->d_name.name, name);
 
   int64_t ret = vtfs_http_call(
       VTFS_TOKEN,
@@ -206,7 +206,7 @@ struct dentry* vtfs_lookup(
       "parent_ino",
       ino_str,
       "name",
-      name
+      child_dentry->d_name.name
   );
   if (ret < 0)
     return NULL;
@@ -217,7 +217,7 @@ struct dentry* vtfs_lookup(
   unsigned long ino;
   char type[16];
   umode_t mode;
-  sscanf(resp, "%lu %15s %ho", &ino, type, &mode);
+  sscanf(resp, "%lu %15s %o", &ino, type, &mode);
 
   struct inode* inode = new_inode(parent_inode->i_sb);
   if (!inode)
@@ -415,7 +415,6 @@ int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
     char* next;
     int idx = 0;
 
-    // . и ..
     if (ctx->pos == 0) {
         if (!dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR))
             return 0;
@@ -430,13 +429,13 @@ int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
         ctx->pos++;
     }
 
-    idx = 2; // теперь позиции для файлов начинаются с 2
+    idx = 2;
 
     while (line && *line) {
         next = strchr(line, '\n');
         if (next) *next++ = 0;
 
-        if (ctx->pos <= idx) {
+        if (ctx->pos == idx) {
             unsigned long ino;
             char type[16];
             umode_t mode;
@@ -450,7 +449,7 @@ int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
             if (!dir_emit(ctx, name, strlen(name), ino, d_type))
                 return 0;
 
-            ctx->pos++;
+            ctx->pos++; 
         }
 
         idx++;
