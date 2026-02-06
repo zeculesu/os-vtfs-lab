@@ -233,7 +233,7 @@ struct dentry* vtfs_lookup(
   }
 
   d_add(child_dentry, inode);
-  return NULL;
+  return child_dentry;
 }
 
 int vtfs_create(
