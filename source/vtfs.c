@@ -130,6 +130,9 @@ int vtfs_create(
   char parent_ino[16];
   snprintf(parent_ino, 16, "%lu", parent_inode->i_ino);
 
+  char mode_str[16];
+  snprintf(mode_str, sizeof(mode_str), "%o", mode & 0777);
+
   int64_t ret = vtfs_http_call(
       "token",
       "create",
@@ -141,7 +144,7 @@ int vtfs_create(
       "name",
       child_dentry->d_name.name,
       "mode",
-      "666"
+      mode_str
   );
 
   if (ret < 0)
@@ -159,10 +162,13 @@ int vtfs_create(
 }
 
 int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
-  char ino[16];
-  snprintf(ino, 16, "%lu", child_dentry->d_inode->i_ino);
+  char parent_ino[16], name[256];
+  snprintf(parent_ino, 16, "%lu", parent_inode->i_ino);
+  snprintf(name, sizeof(name), "%s", child_dentry->d_name.name);
 
-  return vtfs_http_call("token", "unlink", NULL, 0, 1, "ino", ino) < 0 ? -EIO : 0;
+  return vtfs_http_call("token", "unlink", NULL, 0, 2, "parent_ino", parent_ino, "name", name) < 0
+             ? -EIO
+             : 0;
 }
 
 int vtfs_mkdir(
@@ -170,9 +176,21 @@ int vtfs_mkdir(
 ) {
   char parent[16];
   snprintf(parent, 16, "%lu", parent_inode->i_ino);
+  char mode_str[16];
+  snprintf(mode_str, 16, "%o", mode & 0777);
 
   int64_t ret = vtfs_http_call(
-      "token", "mkdir", NULL, 0, 2, "parent_ino", parent, "name", child_dentry->d_name.name
+      "token",
+      "mkdir",
+      NULL,
+      0,
+      3,
+      "parent_ino",
+      parent,
+      "name",
+      child_dentry->d_name.name,
+      "mode",
+      mode_str
   );
 
   return ret < 0 ? -EIO : 0;
@@ -250,39 +268,50 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
-  if (ctx->pos)
-    return 0;
-
-  dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR);
-  dir_emit(ctx, "..", 2, filp->f_inode->i_sb->s_root->d_inode->i_ino, DT_DIR);
-
-  ctx->pos = 2;
-
-  char response[2048];
-  char ino[16];
-  snprintf(ino, sizeof(ino), "%lu", filp->f_inode->i_ino);
-
-  int64_t ret = vtfs_http_call("token", "list", response, sizeof(response), 1, "parent_ino", ino);
-  if (ret < 0)
-    return ret;
-
-  char* p = response;
-  while (*p) {
-    ino_t child_ino;
-    char name[64], type[8];
-
-    char* nl = strchr(p, '\n');
-    if (!nl)
-      break;
-    *nl = 0;
-
-    if (sscanf(p, "%lu %63s %7s", &child_ino, name, type) == 3)
-      dir_emit(ctx, name, strlen(name), child_ino, strcmp(type, "dir") == 0 ? DT_DIR : DT_REG);
-
-    p = nl + 1;
+  if (ctx->pos == 0) {
+    if (!dir_emit(ctx, ".", 1, filp->f_inode->i_ino, DT_DIR))
+      return 0;
+    ctx->pos = 1;
   }
 
-  ctx->pos = 3;
+  if (ctx->pos == 1) {
+    if (!dir_emit(ctx, "..", 2, filp->f_inode->i_sb->s_root->d_inode->i_ino, DT_DIR))
+      return 0;
+    ctx->pos = 2;
+  }
+
+  if (ctx->pos == 2) {
+    char response[2048];
+    char ino[16];
+    snprintf(ino, sizeof(ino), "%lu", filp->f_inode->i_ino);
+
+    int64_t ret = vtfs_http_call("token", "list", response, sizeof(response), 1, "parent_ino", ino);
+    if (ret < 0)
+      return ret;
+
+    char* p = response;
+    while (*p) {
+      char* nl = strchr(p, '\n');
+      if (!nl)
+        break;
+      *nl = 0;
+
+      ino_t child_ino;
+      char name[64], type[8];
+      if (sscanf(p, "%lu %63s %7s", &child_ino, name, type) == 3) {
+        if (!dir_emit(
+                ctx, name, strlen(name), child_ino, strcmp(type, "dir") == 0 ? DT_DIR : DT_REG
+            )) {
+          return 0;
+        }
+      }
+      p = nl + 1;
+      ctx->pos++;
+    }
+
+    return 0;
+  }
+
   return 0;
 }
 

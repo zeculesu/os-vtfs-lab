@@ -65,7 +65,8 @@ def fs_method(method):
         db.execute("INSERT INTO files (name, parent_ino, type, data, mode) VALUES (?, ?, 'file', ?, ?)",
                    (name, parent_ino, b"", mode))
         db.commit()
-        return "ok", 200, {'Content-Type': 'text/plain'}
+        cur = db.execute("SELECT last_insert_rowid() as ino")
+        return str(cur.fetchone()["ino"]), 200
 
     elif method == "mkdir":
         name = args["name"]
@@ -74,38 +75,75 @@ def fs_method(method):
         db.execute("INSERT INTO files (name, parent_ino, type, data, mode) VALUES (?, ?, 'dir', NULL, ?)",
                    (name, parent_ino, mode))
         db.commit()
-        return "ok", 200, {'Content-Type': 'text/plain'}
+        cur = db.execute("SELECT last_insert_rowid() as ino")
+        return str(cur.fetchone()["ino"]), 200
 
 
     elif method == "read":
         ino = int(args["ino"])
-        cur = db.execute("SELECT data FROM files WHERE ino=? AND type='file'", (ino,))
+        offset = int(args.get("offset", 0))
+        size = int(args.get("size", 4096))
+        
+        cur = db.execute("SELECT data, LENGTH(data) as len FROM files WHERE ino=? AND type='file'", (ino,))
         row = cur.fetchone()
         if row is None:
-            return "error: not found", 404, {'Content-Type': 'text/plain'}
-        return row["data"]
-    
+            return "error: not found", 404
+        
+        data = row["data"] or b""
+        data_len = row["len"] or 0
+        
+        if offset >= data_len:
+            return b"", 200
+        
+        end = min(offset + size, data_len)
+        chunk = data[offset:end]
+        
+        return chunk, 200, {'Content-Type': 'application/octet-stream'}
     
     elif method == "write":
         ino = int(args["ino"])
-        data = args["data"].encode('utf-8')
+        data = args["data"]
         offset = int(args.get("offset", 0))
+        
+        import base64
+        try:
+            binary_data = base64.b64decode(data)
+        except:
+            binary_data = data.encode('latin-1')
+        
         cur = db.execute("SELECT data FROM files WHERE ino=? AND type='file'", (ino,))
         row = cur.fetchone()
         if row is None:
-            return jsonify({"error": "not found"}), 404
+            return "error: not found", 404
+        
         old_data = row["data"] or b""
-        new_data = old_data[:offset] + data
-        db.execute("UPDATE files SET data=? WHERE ino=?", (new_data, ino))
+        
+        if offset + len(binary_data) > len(old_data):
+            new_data = bytearray(old_data)
+            new_data[offset:offset + len(binary_data)] = binary_data
+        else:
+            new_data = old_data[:offset] + binary_data + old_data[offset + len(binary_data):]
+        
+        db.execute("UPDATE files SET data=? WHERE ino=?", (bytes(new_data), ino))
         db.commit()
-        return "ok", 200, {'Content-Type': 'text/plain'}
-
+        
+        return "ok", 200
+    
     elif method == "unlink":
         ino = int(args["ino"])
         db.execute("DELETE FROM files WHERE ino=?", (ino,))
         db.commit()
         return "ok", 200, {'Content-Type': 'text/plain'}
 
+    elif method == "rmdir":
+        ino = int(args["ino"])
+        cur = db.execute("SELECT COUNT(*) as cnt FROM files WHERE parent_ino=?", (ino,))
+        if cur.fetchone()["cnt"] > 0:
+            return "error: directory not empty", 400
+        db.execute("DELETE FROM files WHERE ino=?", (ino,))
+        db.commit()
+        return "ok", 200
+    
     else:
         return "error", 400, {'Content-Type': 'text/plain'}
 
