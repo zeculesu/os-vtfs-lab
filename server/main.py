@@ -82,7 +82,7 @@ def fs_method(method):
         cur = db.execute("SELECT data FROM files WHERE ino=? AND type='file'", (ino,))
         row = cur.fetchone()
         if row is None:
-            return "error": "not found", 404, {'Content-Type': 'text/plain'}
+            return "error: not found", 404, {'Content-Type': 'text/plain'}
         return row["data"]
     
     
