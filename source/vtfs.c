@@ -248,28 +248,37 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
 }
 
 int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
-  char response[2048];
-  char ino[16];
-  snprintf(ino, 16, "%lu", filp->f_inode->i_ino);
+    if (ctx->pos)
+        return 0;
 
-  int64_t ret = vtfs_http_call("token", "list", response, sizeof(response), 1, "parent_ino", ino);
+    char response[2048];
+    char ino[16];
+    snprintf(ino, sizeof(ino), "%lu", filp->f_inode->i_ino);
 
-  if (ret < 0)
-    return ret;
+    int64_t ret = vtfs_http_call("token", "list", response, sizeof(response), 1, "parent_ino", ino);
+    if (ret < 0)
+        return ret;
 
-  char* p = response;
-  while (*p) {
-    ino_t child_ino;
-    char name[64], type[8];
-    sscanf(p, "%lu %63s %7s\n", &child_ino, name, type);
+    char* p = response;
+    while (*p) {
+        ino_t child_ino;
+        char name[64], type[8];
 
-    dir_emit(ctx, name, strlen(name), child_ino, strcmp(type, "dir") == 0 ? DT_DIR : DT_REG);
+        char* nl = strchr(p, '\n');
+        if (!nl)
+            break;
+        *nl = 0;
 
-    p = strchr(p, '\n') + 1;
-  }
+        if (sscanf(p, "%lu %63s %7s", &child_ino, name, type) == 3)
+            dir_emit(ctx, name, strlen(name), child_ino, strcmp(type, "dir") == 0 ? DT_DIR : DT_REG);
 
-  return 0;
+        p = nl + 1;
+    }
+
+    ctx->pos = 1;
+    return 0;
 }
+
 
 int vtfs_fill_super(struct super_block* sb, void* data, int silent) {
   struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 0);

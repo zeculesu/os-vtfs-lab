@@ -47,7 +47,7 @@ def fs_method(method):
         out = ""
         for row in cur.fetchall():
             out += f"{row['ino']} {row['name']} {row['type']}\n"
-        return out
+        return out, 200, {'Content-Type': 'text/plain'}
     
     elif method == "lookup":
         ino = int(args["parent_ino"])
