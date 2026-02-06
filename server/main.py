@@ -1,3 +1,4 @@
+import base64
 from flask import Flask, request, jsonify, g
 import sqlite3
 import os
@@ -35,117 +36,94 @@ def init_db():
     if cur.fetchone() is None:
         db.execute("INSERT INTO files (ino, name, parent_ino, type, data, mode) VALUES (?, ?, ?, ?, ?, ?)", (0, "/", 0, "dir", None, 0o777))
         db.commit()
-
-@app.route("/api/<method>", methods=["GET"])
-def fs_method(method):
-    args = request.args
+@app.route("/api/list")
+def list_files():
+    parent_ino = int(request.args["parent_ino"])
     db = get_db()
+    rows = db.execute("SELECT ino, name, type, mode FROM files WHERE parent_ino=?", (parent_ino,)).fetchall()
+    out = "\n".join(f"{r['ino']} {r['type']} {r['mode']} {r['name']}" for r in rows)
+    return out, 200, {'Content-Type': 'text/plain'}
 
-    if method == "list":
-        parent_ino = int(args["parent_ino"])
-        cur = db.execute("SELECT ino, name, type FROM files WHERE parent_ino=?", (parent_ino,))
-        out = ""
-        for row in cur.fetchall():
-            out += f"{row['ino']} {row['name']} {row['type']}\n"
-        return out, 200, {'Content-Type': 'text/plain'}
-    
-    elif method == "lookup":
-        ino = int(args["parent_ino"])
-        name = args["name"]
-        cur = db.execute("SELECT ino, name, type, mode FROM files WHERE parent_ino=? AND name=?", (ino, name))
-        row = cur.fetchone()
-        if not row:
-            return "", 404
-        return f"{row['ino']} {row['type']} {row['mode']}"
+@app.route("/api/lookup")
+def lookup():
+    parent_ino = int(request.args["parent_ino"])
+    name = request.args["name"]
+    db = get_db()
+    row = db.execute("SELECT ino, type, mode FROM files WHERE parent_ino=? AND name=?", (parent_ino, name)).fetchone()
+    if row:
+        return f"{row['ino']} {row['type']} {row['mode']}", 200, {'Content-Type': 'text/plain'}
+    return "ENOENT", 404, {'Content-Type': 'text/plain'}
 
-    elif method == "create":
-        name = args["name"]
-        parent_ino = int(args["parent_ino"])
-        mode = int(args.get("mode", 0o666))
-        db.execute("INSERT INTO files (name, parent_ino, type, data, mode) VALUES (?, ?, 'file', ?, ?)",
-                   (name, parent_ino, b"", mode))
-        db.commit()
-        cur = db.execute("SELECT last_insert_rowid() as ino")
-        return str(cur.fetchone()["ino"]), 200
+@app.route("/api/create")
+def create_file():
+    parent_ino = int(request.args["parent_ino"])
+    name = request.args["name"]
+    mode = int(request.args["mode"])
+    db = get_db()
+    cur = db.execute("INSERT INTO files (name, parent_ino, type, data, mode) VALUES (?, ?, ?, ?, ?)",
+                     (name, parent_ino, "file", b"", mode))
+    db.commit()
+    return str(cur.lastrowid), 200, {'Content-Type': 'text/plain'}
 
-    elif method == "mkdir":
-        name = args["name"]
-        parent_ino = int(args["parent_ino"])
-        mode = int(args.get("mode", 0o777))
-        db.execute("INSERT INTO files (name, parent_ino, type, data, mode) VALUES (?, ?, 'dir', NULL, ?)",
-                   (name, parent_ino, mode))
-        db.commit()
-        cur = db.execute("SELECT last_insert_rowid() as ino")
-        return str(cur.fetchone()["ino"]), 200
+@app.route("/api/mkdir")
+def mkdir():
+    parent_ino = int(request.args["parent_ino"])
+    name = request.args["name"]
+    mode = int(request.args["mode"])
+    db = get_db()
+    cur = db.execute("INSERT INTO files (name, parent_ino, type, data, mode) VALUES (?, ?, ?, ?, ?)",
+                     (name, parent_ino, "dir", None, mode))
+    db.commit()
+    return str(cur.lastrowid), 200, {'Content-Type': 'text/plain'}
 
+@app.route("/api/read")
+def read_file():
+    ino = int(request.args["ino"])
+    offset = int(request.args.get("offset", 0))
+    length = int(request.args.get("length", 1024))
+    db = get_db()
+    row = db.execute("SELECT data FROM files WHERE ino=?", (ino,)).fetchone()
+    if not row:
+        return "ENOENT", 404
+    data = row["data"] or b""
+    chunk = data[offset:offset+length]
+    return base64.b64encode(chunk), 200, {'Content-Type': 'text/plain'}
 
-    elif method == "read":
-        ino = int(args["ino"])
-        offset = int(args.get("offset", 0))
-        size = int(args.get("size", 4096))
-        
-        cur = db.execute("SELECT data, LENGTH(data) as len FROM files WHERE ino=? AND type='file'", (ino,))
-        row = cur.fetchone()
-        if row is None:
-            return "error: not found", 404
-        
-        data = row["data"] or b""
-        data_len = row["len"] or 0
-        
-        if offset >= data_len:
-            return b"", 200
-        
-        end = min(offset + size, data_len)
-        chunk = data[offset:end]
-        
-        return chunk, 200, {'Content-Type': 'application/octet-stream'}
-    
-    elif method == "write":
-        ino = int(args["ino"])
-        data = args["data"]
-        offset = int(args.get("offset", 0))
-        
-        import base64
-        try:
-            binary_data = base64.b64decode(data)
-        except:
-            binary_data = data.encode('latin-1')
-        
-        cur = db.execute("SELECT data FROM files WHERE ino=? AND type='file'", (ino,))
-        row = cur.fetchone()
-        if row is None:
-            return "error: not found", 404
-        
-        old_data = row["data"] or b""
-        
-        if offset + len(binary_data) > len(old_data):
-            new_data = bytearray(old_data)
-            new_data[offset:offset + len(binary_data)] = binary_data
-        else:
-            new_data = old_data[:offset] + binary_data + old_data[offset + len(binary_data):]
-        
-        db.execute("UPDATE files SET data=? WHERE ino=?", (bytes(new_data), ino))
-        db.commit()
-        
-        return "ok", 200
-    
-    elif method == "unlink":
-        ino = int(args["ino"])
-        db.execute("DELETE FROM files WHERE ino=?", (ino,))
-        db.commit()
-        return "ok", 200, {'Content-Type': 'text/plain'}
+@app.route("/api/write")
+def write_file():
+    ino = int(request.args["ino"])
+    offset = int(request.args["offset"])
+    data = base64.b64decode(request.args["data"])
+    db = get_db()
+    row = db.execute("SELECT data FROM files WHERE ino=?", (ino,)).fetchone()
+    old_data = row["data"] or b""
+    if offset > len(old_data):
+        old_data += b'\0' * (offset - len(old_data))
+    new_data = old_data[:offset] + data
+    if offset + len(data) < len(old_data):
+        new_data += old_data[offset+len(data):]
+    db.execute("UPDATE files SET data=? WHERE ino=?", (new_data, ino))
+    db.commit()
+    return "0", 200, {'Content-Type': 'text/plain'}
 
-    elif method == "rmdir":
-        ino = int(args["ino"])
-        cur = db.execute("SELECT COUNT(*) as cnt FROM files WHERE parent_ino=?", (ino,))
-        if cur.fetchone()["cnt"] > 0:
-            return "error: directory not empty", 400
-        db.execute("DELETE FROM files WHERE ino=?", (ino,))
-        db.commit()
-        return "ok", 200
-    
-    else:
-        return "error", 400, {'Content-Type': 'text/plain'}
+@app.route("/api/unlink")
+def unlink():
+    ino = int(request.args["ino"])
+    db = get_db()
+    db.execute("DELETE FROM files WHERE ino=?", (ino,))
+    db.commit()
+    return "0", 200, {'Content-Type': 'text/plain'}
+
+@app.route("/api/rmdir")
+def rmdir():
+    ino = int(request.args["ino"])
+    db = get_db()
+    children = db.execute("SELECT * FROM files WHERE parent_ino=?", (ino,)).fetchall()
+    if children:
+        return "ENOTEMPTY", 409, {'Content-Type': 'text/plain'}
+    db.execute("DELETE FROM files WHERE ino=?", (ino,))
+    db.commit()
+    return "0", 200, {'Content-Type': 'text/plain'}
 
 if __name__ == "__main__":
     with app.app_context():
