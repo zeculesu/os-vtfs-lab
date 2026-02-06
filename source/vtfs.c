@@ -304,7 +304,6 @@ ssize_t vtfs_write(struct file* filp, const char* buffer, size_t len, loff_t* of
     write_pos = *offset;
   }
 
-  new_size = write_pos + len;
   if (write_pos + len > MAX_FILE_SIZE)
     return -ENOSPC;
   if (copy_from_user(f->idata->data + write_pos, buffer, len))
