@@ -43,9 +43,16 @@ def fs_method(method):
 
     if method == "list":
         parent_ino = int(args["parent_ino"])
-        cur = db.execute("SELECT ino, name, type FROM files WHERE parent_ino=?", (parent_ino,))
-        files = [dict(row) for row in cur.fetchall()]
-        return jsonify(files)
+        cur = db.execute(
+            "SELECT ino, name, type FROM files WHERE parent_ino=?",
+            (parent_ino,)
+        )
+
+        out = ""
+        for row in cur.fetchall():
+            out += f"{row['ino']} {row['name']} {row['type']}\n"
+
+        return out
 
     elif method == "create":
         name = args["name"]

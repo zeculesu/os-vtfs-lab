@@ -12,7 +12,7 @@
 #define MODULE_NAME "vtfs"
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("secs-dev");
-MODULE_DESCRIPTION("VTFS - simple RAM FS");
+MODULE_DESCRIPTION("VTFS - simple FS");
 
 #define LOG(fmt, ...) pr_info("[" MODULE_NAME "]: " fmt, ##__VA_ARGS__)
 
@@ -272,7 +272,7 @@ int vtfs_iterate(struct file* filp, struct dir_context* ctx) {
 }
 
 int vtfs_fill_super(struct super_block* sb, void* data, int silent) {
-  struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 100);
+  struct inode* root = vtfs_get_inode(sb, NULL, S_IFDIR | 0777, 0);
   root->i_op = &vtfs_inode_ops;
   root->i_fop = &vtfs_dir_ops;
 
