@@ -66,7 +66,7 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
 
 static struct vtfs_file* vtfs_find_primary_file(ino_t ino) {
   for (int i = 0; i < MAX_FILES; i++) {
-    if (vtfs_files[i].used && vtfs_files[i].ino == ino) {
+    if (vtfs_files[i].ino == ino && vtfs_files[i].idata) {
       return &vtfs_files[i];
     }
   }
