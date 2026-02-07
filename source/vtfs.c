@@ -152,11 +152,6 @@ struct dentry* vtfs_lookup(
   if (!inode)
     return NULL;
 
-  if (file->type == VTFS_FILE) {
-    inode->i_size = file->idata->size;
-    set_nlink(inode, file->idata->link_count);
-  }
-
   if (file->type == VTFS_DIR) {
     inode->i_op = &vtfs_inode_ops;
     inode->i_fop = &vtfs_dir_ops;
@@ -215,11 +210,13 @@ int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
 
   if (f->type == VTFS_FILE) {
     f->idata->link_count--;
-    if (f->idata->link_count == 0) {
+    drop_nlink(child_dentry->d_inode);
+
+    if (f->idata->link_count == 0)
       kfree(f->idata);
-    }
+
+    f->used = 0;
   }
-  f->used = 0;
   return 0;
 }
 
@@ -360,9 +357,11 @@ int vtfs_link(struct dentry* old_dentry, struct inode* parent_dir, struct dentry
   if (!new_inode)
     return -ENOMEM;
 
-  inc_nlink(new_inode);
   new_inode->i_op = &vtfs_inode_ops;
   new_inode->i_fop = &vtfs_file_ops;
+  new_inode->i_size = old_file->idata->size;
+  set_nlink(new_inode, old_file->idata->link_count);
+
   d_add(new_dentry, new_inode);
 
   return 0;
