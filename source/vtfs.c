@@ -152,6 +152,11 @@ struct dentry* vtfs_lookup(
   if (!inode)
     return NULL;
 
+  if (file->type == VTFS_FILE) {
+    inode->i_size = file->idata->size;
+    set_nlink(inode, file->idata->link_count);
+  }
+
   if (file->type == VTFS_DIR) {
     inode->i_op = &vtfs_inode_ops;
     inode->i_fop = &vtfs_dir_ops;
