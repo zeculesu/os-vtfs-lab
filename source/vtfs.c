@@ -187,11 +187,16 @@ int vtfs_unlink(struct inode* parent_inode, struct dentry* child_dentry) {
     return -ENOENT;
 
   drop_nlink(f->idata->inode);
+
   f->idata->link_count--;
-  if (f->idata->link_count == 0)
-    kfree(f->idata);
 
   f->used = 0;
+
+  if (f->idata->link_count == 0) {
+    kfree(f->idata);
+    f->idata = NULL;
+  }
+
   return 0;
 }
 
